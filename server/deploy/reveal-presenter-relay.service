@@ -1,0 +1,31 @@
+# systemd unit for the relay.  Install the server/ directory at
+# /opt/reveal-presenter-relay, run `npm install --omit=dev` there, create the
+# user (useradd --system --no-create-home presenter-relay), then:
+#
+#   cp reveal-presenter-relay.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now reveal-presenter-relay
+#
+# It listens on 127.0.0.1 only; nginx-relay.conf puts TLS in front of it.
+
+[Unit]
+Description=reveal.js-presenter relay (Socket.IO)
+After=network.target
+
+[Service]
+Type=simple
+User=presenter-relay
+WorkingDirectory=/opt/reveal-presenter-relay
+ExecStart=/usr/bin/node /opt/reveal-presenter-relay/relay.js
+Environment=PORT=1948
+Environment=HOST=127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+# The relay needs no disk access beyond its own code.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

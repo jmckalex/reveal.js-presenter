@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+	A small deck for trying reveal.js-presenter, and the one tools/e2e-test.js
+	drives.  The only presenter-specific lines are the two <script> tags marked
+	below; everything else is an ordinary reveal.js deck.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>reveal.js-presenter demo</title>
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.css">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/theme/white.css">
+</head>
+<body>
+	<div class="reveal">
+		<div class="slides">
+			<section>
+				<h2>reveal.js-presenter</h2>
+				<p>A presenter view on a second device</p>
+				<aside class="notes">
+					Welcome. These notes appear on the tablet, not on the projector.
+
+					A blank line starts a new paragraph.
+				</aside>
+			</section>
+
+			<section>
+				<h2>Fragments</h2>
+				<ul>
+					<li class="fragment">The tablet shows this slide as the audience sees it</li>
+					<li class="fragment">and the next fragment in the “Next” pane</li>
+					<li class="fragment">so you know what the next click will reveal.</li>
+				</ul>
+				<aside class="notes">Step through these one at a time.</aside>
+			</section>
+
+			<section>
+				<section>
+					<h2>Vertical slides</h2>
+					<p>Press down.</p>
+					<aside class="notes">Notes on the top slide of a vertical stack.</aside>
+				</section>
+				<section data-notes="Notes can also come from a data-notes attribute.">
+					<h2>One below</h2>
+				</section>
+			</section>
+
+			<section>
+				<h2>A slide without notes</h2>
+			</section>
+
+			<section id="questions">
+				<h2>Questions?</h2>
+				<p>Go to <a href="../client/ask.html">ask.html</a> and enter the code</p>
+				<!-- Filled in only on the laptop copy (?master=…); everyone else sees the dots. -->
+				<p style="font-size: 2.5em; letter-spacing: 0.15em;"><span class="question-code">····</span></p>
+			</section>
+
+			<section>
+				<h2>The end</h2>
+			</section>
+		</div>
+	</div>
+
+	<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/plugin/notes/notes.js"></script>
+
+	<!-- reveal.js-presenter: inert unless the URL has ?master=<secret>. -->
+	<script src="../client/presenter-config.js"></script>
+	<script src="../client/presenter-master.js"></script>
+
+	<script>
+		Reveal.initialize({ hash: true, plugins: [RevealNotes] });
+	</script>
+</body>
+</html>

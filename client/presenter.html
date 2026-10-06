@@ -1,0 +1,530 @@
+<!doctype html>
+<!--
+	reveal.js-presenter — the presenter view, for an iPad, tablet or phone.
+
+	Shows the current slide, the next slide or fragment, the speaker notes, a
+	clock and a timer, following whichever deck is open somewhere with
+	?master=<secret> (see presenter-master.js).  The two sides talk only through
+	the relay, so they need nothing in common but an internet connection; venue
+	WiFi often stops devices from reaching each other directly.
+
+	Both slides are the deck itself, loaded twice in iframes and driven through
+	their window.Reveal, which is why this page must be served from the same
+	origin as the decks.
+
+	?deck=/path/to/deck.html loads a deck straight away, before the laptop speaks.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="mobile-web-app-capable" content="yes">
+	<meta name="apple-mobile-web-app-status-bar-style" content="black">
+	<meta name="robots" content="noindex">
+	<title>Presenter view</title>
+	<script src="presenter-config.js"></script>
+	<style>
+		:root {
+			--bg: #141414;
+			--panel: #1f1f1f;
+			--text: #ececec;
+			--muted: #8d8d8d;
+			--ok: #3fb950;
+			--warn: #e3a43b;
+			--bad: #e5534b;
+			--notes-size: 22px;
+			--deck-aspect: 16 / 9;
+			color-scheme: dark;
+		}
+		* { box-sizing: border-box; }
+		[hidden] { display: none !important; }
+		html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+			font-family: -apple-system, system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+		body { display: flex; flex-direction: column; height: 100dvh;
+			padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+		button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid #3a3a3a;
+			border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+
+		header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; font-size: 15px; flex: none; }
+		.status { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+		.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
+		.status.ok .dot { background: var(--ok); }
+		.status.warn .dot { background: var(--warn); }
+		.status.bad .dot { background: var(--bad); }
+		.title { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.spacer { flex: 1; }
+
+		main { flex: 1; min-height: 0; display: grid; gap: 12px; padding: 0 12px 12px;
+			grid-template-columns: 3fr 2fr; grid-template-rows: auto minmax(0, 1fr);
+			grid-template-areas: "current next" "notes clock"; }
+		@media (orientation: portrait) {
+			main { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto minmax(0, 1fr);
+				grid-template-areas: "current current" "next clock" "notes notes"; }
+		}
+
+		.frame { position: relative; aspect-ratio: var(--deck-aspect); background: #000; border-radius: 6px; overflow: hidden; }
+		/* Laid out at a fixed FRAME_WIDTH and scaled to fit; see the script. */
+		.frame iframe { position: absolute; top: 0; left: 0; width: 1280px; height: 720px; border: 0;
+			pointer-events: none; transform-origin: 0 0; transform: scale(var(--scale, 0.5)); }
+		.current { grid-area: current; }
+		.next-col { grid-area: next; }
+		.label { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+		.overlay-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+			text-align: center; padding: 24px; background: rgba(20, 20, 20, 0.85); font-size: 18px; line-height: 1.4; }
+		.badge { position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 6px;
+			background: var(--warn); color: #000; font-weight: 600; font-size: 15px; }
+
+		.notes { grid-area: notes; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--panel);
+			border-radius: 6px; padding: 4px 18px; font-size: var(--notes-size); line-height: 1.4;
+			-webkit-user-select: text; user-select: text; }
+		.notes .none { color: var(--muted); }
+
+		.clock-col { grid-area: clock; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+		.counter { color: var(--muted); font-size: 20px; }
+		.clock { font-size: 34px; font-variant-numeric: tabular-nums; }
+		.timer { font-size: 56px; font-variant-numeric: tabular-nums; padding: 2px 20px; border: none; background: none; }
+		.timer.paused { color: var(--warn); }
+
+		/* With audience questions on, the clock and timer shrink to one line and the
+		   questions take the rest of the corner. */
+		.timebox { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+		body.questions-on main { grid-template-rows: auto auto minmax(0, 1fr);
+			grid-template-areas: "current next" "current clock" "notes clock"; }
+		@media (orientation: portrait) {
+			body.questions-on main { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto minmax(0, 1fr);
+				grid-template-areas: "current current" "next clock" "notes clock"; }
+		}
+		body.questions-on .clock-col { justify-content: flex-start; align-items: stretch; gap: 8px; min-height: 0; }
+		body.questions-on .timebox { flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 4px 14px; }
+		body.questions-on .counter { font-size: 15px; width: 100%; text-align: center; }
+		body.questions-on .clock { font-size: 24px; }
+		body.questions-on .timer { font-size: 32px; padding: 0 6px; }
+		body.questions-on #reset { font-size: 13px; padding: 3px 8px; }
+		.questions { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel);
+			border-radius: 6px; padding: 8px 10px; }
+		.q-head { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+		.q-head .count { background: var(--warn); color: #000; border-radius: 10px; padding: 0 7px; font-weight: 600; }
+		.q-head button { font-size: 13px; padding: 2px 8px; margin-left: auto; }
+		.q-head button + button { margin-left: 0; }
+		.questions ol { list-style: none; margin: 6px 0 0; padding: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1; }
+		.questions li { padding: 8px 10px; border-radius: 6px; background: #2a2a2a; margin-bottom: 6px; font-size: 18px;
+			line-height: 1.3; -webkit-user-select: text; user-select: text; transition: background 1s; }
+		.questions li.fresh { background: #4a3d1c; }
+		.questions li p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+		.questions li time { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+		.questions .hint { color: var(--muted); font-size: 14px; margin: 8px 0 0; }
+		.questions form { display: flex; gap: 6px; margin-top: 8px; }
+		.questions form input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 6px;
+			border: 1px solid #3a3a3a; background: #111; color: var(--text); }
+
+		.start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+			gap: 14px; background: rgba(0, 0, 0, 0.8); text-align: center; padding: 24px; }
+		.start button { font-size: 28px; padding: 14px 40px; background: var(--ok); color: #000; border: none; }
+		.start p { color: var(--muted); max-width: 32em; line-height: 1.4; margin: 0; }
+	</style>
+</head>
+<body>
+	<header>
+		<span class="status" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></span>
+		<span class="title" id="title"></span>
+		<span class="spacer"></span>
+		<button id="smaller" aria-label="Smaller notes">A−</button>
+		<button id="larger" aria-label="Larger notes">A+</button>
+	</header>
+
+	<main>
+		<div class="frame current">
+			<iframe id="current" title="Current slide" tabindex="-1"></iframe>
+			<div class="badge" id="badge" hidden></div>
+			<div class="overlay-text" id="placeholder">
+				Waiting for the presentation. On the laptop, open the deck with ?master=&lt;secret&gt; at the end of its address.
+			</div>
+		</div>
+		<div class="next-col">
+			<div class="label">Next</div>
+			<div class="frame">
+				<iframe id="upcoming" title="Next slide" tabindex="-1"></iframe>
+				<div class="overlay-text" id="end" hidden>End of presentation</div>
+			</div>
+		</div>
+		<div class="notes" id="notes"></div>
+		<div class="clock-col">
+			<div class="timebox">
+				<div class="counter" id="counter"></div>
+				<div class="clock" id="clock"></div>
+				<button class="timer" id="timer" aria-label="Pause or resume the timer">0:00</button>
+				<button id="reset">Reset timer</button>
+			</div>
+			<section class="questions" id="questions" hidden aria-label="Audience questions">
+				<div class="q-head">
+					<span id="q-status">Questions</span>
+					<span class="count" id="q-count" hidden></span>
+					<button id="q-clear" type="button">Clear</button>
+					<button id="q-change-key" type="button">Key</button>
+				</div>
+				<form id="q-keyform" hidden>
+					<input id="q-key" type="password" placeholder="Questions key" autocomplete="off" autocapitalize="characters" spellcheck="false">
+					<button type="submit">Connect</button>
+				</form>
+				<ol id="q-list"></ol>
+				<p class="hint" id="q-empty">No questions yet.  Tap a question to dismiss it.</p>
+			</section>
+		</div>
+	</main>
+
+	<div class="start" id="start">
+		<button id="start-button">Start</button>
+		<p id="start-hint">Starts the timer and keeps the screen awake.</p>
+	</div>
+
+	<script>
+	(function () {
+		'use strict';
+		const $ = id => document.getElementById(id);
+		const config = window.PresenterConfig;
+		if (!config || !config.relay || !config.channel) {
+			$('placeholder').textContent = 'presenter-config.js is missing or incomplete: it must set PresenterConfig.relay and PresenterConfig.channel.';
+			$('start').hidden = true;
+			return;
+		}
+		const RELAY = config.relay.replace(/\/+$/, '');
+		const CHANNEL = config.channel;
+		const SILENT_MS = 3 * (config.heartbeatMs || 3000) + 1000;
+		const HIDE = config.hideInFrames
+			|| '.slide-menu-button, .slide-menu-wrapper, #customcontrols, .chalkboard-button, .board-button, #nextboard, #previousboard';
+		const deckUrl = typeof config.deckUrl === 'function' ? config.deckUrl : path => path;
+
+		const frames = { current: $('current'), upcoming: $('upcoming') };
+		const loaded = { current: false, upcoming: false };
+		let deck = null;		// path of the deck loaded
+		let state = null;		// the laptop's latest Reveal state
+		let applied = null;		// what render() last did, to detect drift
+		let lastHeard = 0;
+		let socket = null;
+		let relayFailed = false;
+
+		// ---- The two copies of the deck
+
+		// Each frame is laid out at a fixed width and scaled down to fit its box,
+		// so the deck always sees a full-size window.  Sized to its box instead,
+		// the next-slide frame is about 400px wide on a portrait iPad, and
+		// reveal.js 5 turns any deck narrower than 435px into a scrolling page,
+		// where setState() and next() scroll rather than jump and the frame shows
+		// the wrong fragment.  Turning that off afterwards with
+		// Reveal.configure({ scrollActivationWidth: null }) does not leave scroll
+		// view once it is active.
+		const FRAME_WIDTH = 1280;
+		const scaler = new ResizeObserver(entries => {
+			for (const e of entries) e.target.style.setProperty('--scale', e.contentRect.width / FRAME_WIDTH);
+		});
+		document.querySelectorAll('.frame').forEach(box => scaler.observe(box));
+
+		// Match the frames to the deck's own aspect ratio (reveal's default is
+		// 960x700, not 16:9).  Percentage sizes fall back to 16:9.
+		function matchAspect(R) {
+			const c = R.getConfig();
+			if (typeof c.width !== 'number' || typeof c.height !== 'number') return;
+			document.documentElement.style.setProperty('--deck-aspect', c.width + ' / ' + c.height);
+			const height = Math.round(FRAME_WIDTH * c.height / c.width) + 'px';
+			Object.values(frames).forEach(f => { f.style.height = height; });
+		}
+
+		function isSafePath(p) {
+			return typeof p === 'string' && /^\/(?!\/)/.test(p) && !/[\s"'<>]/.test(p);
+		}
+
+		function loadDeck(path) {
+			deck = path;
+			applied = null;
+			loaded.current = loaded.upcoming = false;
+			for (const frame of Object.values(frames)) frame.src = deckUrl(path);
+			$('placeholder').hidden = true;
+		}
+
+		function whenReady(frame, fn) {
+			const started = Date.now();
+			(function poll() {
+				let ready = false;
+				try {
+					const R = frame.contentWindow.Reveal;
+					ready = !!(R && R.isReady && R.isReady());
+				} catch (e) { /* not loaded yet, or not same-origin */ }
+				if (ready) fn();
+				else if (Date.now() - started < 60000) setTimeout(poll, 150);
+				else $('status-text').textContent = 'Deck has no window.Reveal (or is on another origin)';
+			})();
+		}
+
+		function silence(frame) {
+			frame.contentDocument.querySelectorAll('video, audio').forEach(m => { m.muted = true; m.pause(); });
+		}
+
+		// A passive copy: no controls, no transitions, no hash in its URL (which
+		// would otherwise fill the tablet's back-swipe history), and no media.
+		function prepare(frame) {
+			frame.contentWindow.Reveal.configure({
+				controls: false, progress: false, slideNumber: false, help: false,
+				keyboard: false, touch: false, hash: false, history: false,
+				autoPlayMedia: false, transition: 'none', backgroundTransition: 'none'
+			});
+			const style = frame.contentDocument.createElement('style');
+			style.textContent = HIDE + ' { display: none !important; }';
+			frame.contentDocument.head.appendChild(style);
+			silence(frame);
+		}
+
+		for (const [key, frame] of Object.entries(frames)) {
+			frame.addEventListener('load', () => {
+				if (!frame.getAttribute('src')) return;
+				whenReady(frame, () => {
+					prepare(frame);
+					if (key === 'current') {
+						matchAspect(frame.contentWindow.Reveal);
+						$('title').textContent = frame.contentDocument.title;
+					}
+					loaded[key] = true;
+					render();
+				});
+			});
+		}
+
+		const position = s => s.indexh + '/' + s.indexv + '/' + s.indexf;
+
+		function render() {
+			if (!state || !loaded.current || !loaded.upcoming) return;
+			const key = JSON.stringify(state);
+			const cur = frames.current.contentWindow.Reveal;
+			const up = frames.upcoming.contentWindow.Reveal;
+
+			// Skip a heartbeat with nothing new -- unless a frame is no longer
+			// where it was put.  iPad Safari can reload an iframe in the
+			// background to save memory, which leaves it on the first slide; the
+			// next heartbeat then puts it back.
+			if (applied && applied.key === key && position(cur.getState()) === applied.cur
+				&& position(up.getState()) === applied.up) return;
+
+			// Show the slide itself even when the laptop has the overview open or
+			// the screen blanked, and say so in a badge instead.
+			const base = Object.assign({}, state, { overview: false, paused: false });
+			cur.setState(base);
+			up.setState(base);
+			up.next();
+			const after = up.getState();
+			applied = { key: key, cur: position(cur.getState()), up: position(after) };
+
+			$('end').hidden = position(after) !== position(base);
+			Object.values(frames).forEach(silence);
+
+			const flags = [];
+			if (state.paused) flags.push('Screen blanked');
+			if (state.overview) flags.push('Overview open');
+			$('badge').textContent = flags.join(' · ');
+			$('badge').hidden = !flags.length;
+
+			const notes = (cur.getSlideNotes() || '').trim();
+			$('notes').innerHTML = notes
+				? notes.split(/\n\s*\n/).map(p => '<p>' + p + '</p>').join('')
+				: '<p class="none">No notes for this slide.</p>';
+			$('notes').scrollTop = 0;
+			$('counter').textContent = 'Slide ' + (cur.getSlidePastCount() + 1) + ' of ' + cur.getTotalSlides();
+		}
+
+		// ---- The relay
+
+		function onState(data) {
+			if (!data || !data.state || !isSafePath(data.deck)) return;
+			lastHeard = Date.now();
+			if (data.deck !== deck) loadDeck(data.deck);
+			state = data.state;
+			render();
+			updateStatus();
+		}
+
+		function updateStatus() {
+			let level, text;
+			if (relayFailed) { level = 'bad'; text = 'Relay unreachable'; }
+			else if (!socket) { level = ''; text = 'Connecting…'; }
+			else if (!socket.connected) { level = 'bad'; text = 'Reconnecting…'; }
+			else if (Date.now() - lastHeard > SILENT_MS) {
+				level = 'warn';
+				text = lastHeard ? 'The laptop has gone quiet' : 'Waiting for the laptop';
+			}
+			else { level = 'ok'; text = 'Following'; }
+			$('status').className = 'status ' + level;
+			$('status-text').textContent = text;
+		}
+
+		const script = document.createElement('script');
+		script.src = RELAY + '/socket.io/socket.io.js';
+		script.onload = () => {
+			socket = io(RELAY);
+			socket.on(CHANNEL, onState);
+			socket.on('connect', () => {
+				// Ask for the latest position at once.  server/relay.js answers;
+				// a plain reveal/multiplex relay ignores this, and the laptop's
+				// next heartbeat does the job instead.
+				socket.emit('presenter-hello', CHANNEL);
+				updateStatus();
+				listenForQuestions();
+			});
+			socket.on('disconnect', () => { updateStatus(); setQuestionStatus('Questions: reconnecting…'); });
+			socket.on('question', addQuestion);
+			updateStatus();
+		};
+
+		// ---- Audience questions (ask.html)
+		//
+		// The laptop opens questions on the relay; this page listens with a key
+		// entered once and remembered on this device.  Questions live only in this
+		// page: nothing is stored, and a reload starts with an empty list.
+
+		const QUESTIONS = /^[0-9a-f]{64}$/.test(config.questionsKey || '');
+		const KEY_STORE = 'presenter-questions-key';
+		let questionsKey = null;
+		let retryListen = null;
+		if (QUESTIONS) {
+			document.body.classList.add('questions-on');
+			$('questions').hidden = false;
+			try { questionsKey = localStorage.getItem(KEY_STORE); } catch (e) { /* storage blocked */ }
+			if (!questionsKey) showKeyForm();
+		}
+
+		function setQuestionStatus(text) { $('q-status').textContent = text; }
+
+		function showKeyForm(message) {
+			$('q-keyform').hidden = false;
+			setQuestionStatus(message || 'Enter the questions key');
+		}
+
+		function listenForQuestions() {
+			if (!QUESTIONS || !questionsKey || !socket || !socket.connected) return;
+			clearTimeout(retryListen);
+			socket.emit('questions-listen', { channel: CHANNEL, key: questionsKey }, res => {
+				if (res && res.ok) {
+					$('q-keyform').hidden = true;
+					setQuestionStatus(res.code ? 'Questions on · code ' + res.code : 'Questions on');
+				}
+				else if (res && res.reason === 'key') {
+					questionsKey = null;
+					try { localStorage.removeItem(KEY_STORE); } catch (e) { /* storage blocked */ }
+					showKeyForm('That key was not accepted');
+				}
+				else {
+					// Questions open only once the laptop deck is running with ?master.
+					setQuestionStatus('Questions: waiting for the laptop');
+					retryListen = setTimeout(listenForQuestions, 5000);
+				}
+			});
+		}
+
+		$('q-keyform').addEventListener('submit', e => {
+			e.preventDefault();
+			const key = $('q-key').value.trim().toUpperCase();
+			if (!key) return;
+			questionsKey = key;
+			$('q-key').value = '';
+			try { localStorage.setItem(KEY_STORE, key); } catch (e2) { /* storage blocked */ }
+			setQuestionStatus('Connecting…');
+			listenForQuestions();
+		});
+		$('q-change-key').addEventListener('click', () => showKeyForm());
+
+		function updateQuestionCount() {
+			const n = $('q-list').children.length;
+			$('q-count').textContent = n;
+			$('q-count').hidden = n === 0;
+			$('q-empty').hidden = n > 0;
+		}
+
+		function addQuestion(q) {
+			if (!q || typeof q.text !== 'string' || !q.text) return;
+			const item = document.createElement('li');
+			const text = document.createElement('p');
+			text.textContent = q.text;			// never innerHTML: this is anonymous input
+			const time = document.createElement('time');
+			time.dataset.at = Number(q.at) || Date.now();
+			item.append(text, time);
+			item.className = 'fresh';
+			item.addEventListener('click', () => { item.remove(); updateQuestionCount(); });
+			$('q-list').prepend(item);
+			while ($('q-list').children.length > 50) $('q-list').lastElementChild.remove();
+			setTimeout(() => item.classList.remove('fresh'), 4000);
+			updateQuestionCount();
+			updateQuestionTimes();
+		}
+
+		function updateQuestionTimes() {
+			for (const time of $('q-list').querySelectorAll('time')) {
+				const minutes = Math.floor((Date.now() - Number(time.dataset.at)) / 60000);
+				time.textContent = minutes < 1 ? 'just now' : minutes + ' min ago';
+			}
+		}
+
+		$('q-clear').addEventListener('click', () => { $('q-list').replaceChildren(); updateQuestionCount(); });
+		script.onerror = () => { relayFailed = true; updateStatus(); };
+		document.head.appendChild(script);
+
+		// ---- Clock, timer and notes size
+
+		let timerRunning = false, timerStart = 0, timerBanked = 0;
+		const elapsed = () => timerBanked + (timerRunning ? Date.now() - timerStart : 0);
+		function format(ms) {
+			const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+			const ss = String(s % 60).padStart(2, '0');
+			return h ? h + ':' + String(m).padStart(2, '0') + ':' + ss : m + ':' + ss;
+		}
+		$('timer').addEventListener('click', () => {
+			if (timerRunning) timerBanked = elapsed(); else timerStart = Date.now();
+			timerRunning = !timerRunning;
+			$('timer').classList.toggle('paused', !timerRunning);
+		});
+		$('reset').addEventListener('click', () => { timerBanked = 0; timerStart = Date.now(); });
+
+		function tick() {
+			$('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+			$('timer').textContent = format(elapsed());
+			updateStatus();
+			if (QUESTIONS) updateQuestionTimes();
+		}
+		setInterval(tick, 500);
+		tick();
+
+		let notesSize = 22;
+		try { notesSize = Number(localStorage.getItem('presenter-notes-size')) || 22; } catch (e) { /* storage blocked */ }
+		function setNotesSize(px) {
+			notesSize = Math.min(44, Math.max(14, px));
+			document.documentElement.style.setProperty('--notes-size', notesSize + 'px');
+			try { localStorage.setItem('presenter-notes-size', notesSize); } catch (e) { /* storage blocked */ }
+		}
+		$('smaller').addEventListener('click', () => setNotesSize(notesSize - 2));
+		$('larger').addEventListener('click', () => setNotesSize(notesSize + 2));
+		setNotesSize(notesSize);
+
+		// ---- Start: the timer, and a wake lock so the tablet does not sleep
+		// mid-talk.  iOS releases the lock whenever the page is hidden, so it is
+		// requested again on return.
+
+		let started = false;
+		async function keepAwake() {
+			try { await navigator.wakeLock.request('screen'); } catch (e) { /* unsupported or refused */ }
+		}
+		if (!('wakeLock' in navigator)) {
+			$('start-hint').textContent = 'Starts the timer. This browser cannot keep the screen awake, so turn off auto-lock.';
+		}
+		$('start-button').addEventListener('click', () => {
+			started = true;
+			keepAwake();
+			timerBanked = 0; timerStart = Date.now(); timerRunning = true;
+			$('start').hidden = true;
+		});
+		document.addEventListener('visibilitychange', () => {
+			if (started && document.visibilityState === 'visible') keepAwake();
+		});
+
+		const initial = new URLSearchParams(location.search).get('deck');
+		if (isSafePath(initial)) loadDeck(initial);
+	})();
+	</script>
+</body>
+</html>

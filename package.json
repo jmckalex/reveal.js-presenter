@@ -1,0 +1,14 @@
+{
+  "name": "reveal-js-presenter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A reveal.js presenter view on a second device (iPad, tablet, phone), via a Socket.IO relay",
+  "scripts": {
+    "relay": "node server/relay.js",
+    "channel": "node tools/make-channel.js",
+    "test": "node tools/e2e-test.js"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.0.0"
+  }
+}

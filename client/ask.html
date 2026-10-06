@@ -1,0 +1,146 @@
+<!doctype html>
+<!--
+	reveal.js-presenter — the audience's page for sending a question to the
+	presenter's tablet (presenter.html), through the relay.
+
+	A question goes through only with the 4-digit code shown on a slide (it
+	changes daily), and only while the presenter's tablet is listening; it is
+	never stored.  ?code=1234 pre-fills the code, e.g. from a QR code.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex">
+	<title>Ask a question</title>
+	<script src="presenter-config.js"></script>
+	<style>
+		:root {
+			--bg: #faf8f2;
+			--text: #222;
+			--muted: #6b6b6b;
+			--accent: rgb(139, 116, 61);
+			--border: #d6d0bd;
+			--field: #fff;
+			--ok: #2e7d32;
+			--bad: #b3261e;
+			color-scheme: light dark;
+		}
+		@media (prefers-color-scheme: dark) {
+			:root:not([data-theme="light"]) {
+				--bg: #161616; --text: #ececec; --muted: #9a9a9a; --border: #3a3a3a; --field: #1f1f1f;
+				--accent: rgb(201, 169, 97); --ok: #6fcf73; --bad: #ff8a80;
+			}
+		}
+		* { box-sizing: border-box; }
+		body { margin: 0; background: var(--bg); color: var(--text);
+			font: 17px/1.45 -apple-system, system-ui, sans-serif; }
+		main { max-width: 34rem; margin: 0 auto; padding: 24px 16px 40px; }
+		h1 { font-size: 24px; margin: 0 0 4px; }
+		.lead { color: var(--muted); margin: 0 0 20px; }
+		label { display: block; font-weight: 600; margin: 16px 0 6px; }
+		input, textarea { width: 100%; font: inherit; color: var(--text); background: var(--field);
+			border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+		input#code { width: 7.5em; letter-spacing: 0.3em; font-variant-numeric: tabular-nums; font-size: 20px; }
+		textarea { min-height: 8em; resize: vertical; }
+		input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+		.counter { text-align: right; color: var(--muted); font-size: 14px; margin-top: 4px; }
+		button { margin-top: 16px; width: 100%; font: inherit; font-weight: 600; padding: 12px; border: 0;
+			border-radius: 8px; background: var(--accent); color: #fff; }
+		button:disabled { opacity: 0.5; }
+		.status { min-height: 1.5em; margin-top: 14px; }
+		.status.ok { color: var(--ok); }
+		.status.bad { color: var(--bad); }
+		.note { color: var(--muted); font-size: 14px; margin-top: 24px; }
+	</style>
+</head>
+<body>
+	<main>
+		<h1>Ask a question</h1>
+		<p class="lead">It goes straight to the lecturer’s screen, anonymously.</p>
+
+		<form id="form" novalidate>
+			<label for="code">Code from the slide</label>
+			<input id="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required>
+
+			<label for="text">Your question</label>
+			<textarea id="text" maxlength="280" required></textarea>
+			<div class="counter"><span id="left">280</span> characters left</div>
+
+			<button id="send" type="submit" disabled>Send</button>
+			<p class="status" id="status" role="status" aria-live="polite"></p>
+		</form>
+
+		<p class="note">
+			Questions are not stored anywhere: they are shown to the lecturer during the
+			lecture and then discarded.  Your name is not attached.
+		</p>
+	</main>
+
+	<script>
+	(function () {
+		'use strict';
+		const $ = id => document.getElementById(id);
+		const config = window.PresenterConfig || {};
+		const status = (text, kind) => { $('status').textContent = text; $('status').className = 'status ' + (kind || ''); };
+
+		if (!config.relay || !config.channel || !/^[0-9a-f]{64}$/.test(config.questionsKey || '')) {
+			status('Questions are not set up for this presentation.', 'bad');
+			$('form').querySelectorAll('input, textarea, button').forEach(e => { e.disabled = true; });
+			return;
+		}
+
+		const MESSAGES = {
+			code: 'That code doesn’t match the one on the slide.',
+			closed: 'Questions aren’t open right now.',
+			offline: 'The lecturer’s screen isn’t connected, so your question wasn’t delivered.  Please try again shortly.',
+			slow: 'Please wait a few seconds before sending another question.',
+			busy: 'Lots of questions are arriving at once.  Please try again in a minute.',
+			invalid: 'Questions must be between 1 and 280 characters.'
+		};
+
+		const code = new URLSearchParams(location.search).get('code');
+		if (/^\d{4}$/.test(code || '')) $('code').value = code;
+		else { try { $('code').value = sessionStorage.getItem('ask-code') || ''; } catch (e) { /* storage blocked */ } }
+
+		let socket = null;
+		const ready = () => {
+			const n = [...$('text').value].length;
+			$('left').textContent = 280 - n;
+			$('send').disabled = !(socket && socket.connected && /^\d{4}$/.test($('code').value) && $('text').value.trim());
+		};
+		$('code').addEventListener('input', () => { $('code').value = $('code').value.replace(/\D/g, '').slice(0, 4); ready(); });
+		$('text').addEventListener('input', ready);
+
+		const script = document.createElement('script');
+		script.src = config.relay.replace(/\/+$/, '') + '/socket.io/socket.io.js';
+		script.onload = () => {
+			socket = io(config.relay.replace(/\/+$/, ''));
+			socket.on('connect', () => { status(''); ready(); });
+			socket.on('disconnect', () => { status('Connection lost; reconnecting…', 'bad'); ready(); });
+			ready();
+		};
+		script.onerror = () => status('Can’t reach the question service right now.', 'bad');
+		document.head.appendChild(script);
+
+		$('form').addEventListener('submit', e => {
+			e.preventDefault();
+			if ($('send').disabled) return;
+			$('send').disabled = true;
+			status('Sending…');
+			const sentCode = $('code').value;
+			socket.timeout(10000).emit('question', { channel: config.channel, code: sentCode, text: $('text').value }, (err, res) => {
+				if (err) status('No reply from the question service.  Please try again.', 'bad');
+				else if (res && res.ok) {
+					status('Sent.  Thank you!', 'ok');
+					$('text').value = '';
+					try { sessionStorage.setItem('ask-code', sentCode); } catch (e2) { /* storage blocked */ }
+				}
+				else status(MESSAGES[res && res.reason] || 'Your question could not be sent.', 'bad');
+				ready();
+			});
+		});
+	})();
+	</script>
+</body>
+</html>

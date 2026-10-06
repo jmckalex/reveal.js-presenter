@@ -1,0 +1,16 @@
+{
+  "name": "reveal-js-presenter-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Socket.IO relay for reveal.js-presenter, wire-compatible with reveal/multiplex",
+  "main": "relay.js",
+  "scripts": {
+    "start": "node relay.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.0"
+  }
+}

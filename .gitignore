@@ -1,0 +1,4 @@
+node_modules/
+# Generated per user by tools/make-channel.js; the example deck expects it.
+client/presenter-config.js
+.DS_Store

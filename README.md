@@ -10,7 +10,37 @@ an iPad on the lectern (or hold a phone), and it shows:
 
 reveal.js's own speaker view (the `S` key) opens a popup tied to the laptop's
 browser, so it can't move to another device. This can, and it works when you
-are nowhere near the laptop.
+are nowhere near the laptop. Optionally, the audience can send questions to it
+from their phones, by scanning a QR code on a slide.
+
+![The laptop deck and the tablet's presenter view side by side, as the laptop steps through the demo deck and a student's question arrives on the tablet](docs/demo.gif)
+
+## Try it on one computer
+
+Five minutes, with Node 18 or later. From this directory:
+
+```
+npm --prefix server install
+node server/relay.js &
+node tools/make-channel.js http://127.0.0.1:1948 --write client/presenter-config.js \
+     --ask http://127.0.0.1:8000/client/ask.html
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+`make-channel.js` prints a **secret** and a **questions key**. Then, in two
+browser windows:
+
+1. **"Laptop":** `http://127.0.0.1:8000/example/index.html?master=<secret>`
+2. **"Tablet":** `http://127.0.0.1:8000/client/presenter.html`. Make the window
+   tablet-sized, tap **Start**, and enter the questions key when asked.
+
+Step through the deck in the first window; the second follows. On the
+*Questions?* slide, open the QR code's link (or `client/ask.html`) in a third
+window and send a question. When you're done, stop the two servers. The
+generated `client/presenter-config.js` is ignored by git.
+
+Everything here runs on `127.0.0.1`. To use a real tablet, the relay and the
+decks must be reachable from it: see [Doing it by hand](#doing-it-by-hand).
 
 ## How it works
 
@@ -107,10 +137,10 @@ Students can send questions straight to the tablet, from their phones:
    `<span class="question-code">····</span>` wherever you want it. Only the
    laptop's copy knows the code, because it is derived from the secret, and it
    changes daily. Everyone else, including the published deck, sees the dots.
-2. **Students** open `ask.html`, perhaps from a QR code on the same slide.
-   They type the code and a question of up to 280 characters, and press Send.
-   They are told whether it was delivered. `?code=1234` in the link pre-fills
-   the code.
+2. **Students** open `ask.html`, most easily by scanning a QR code on the
+   same slide (below), which fills the code in for them. They type a question
+   of up to 280 characters, and press Send. They are told whether it was
+   delivered.
 3. The **tablet** shows each question in its lower-right corner, newest
    first. The clock and timer shrink to make room; tap a question to dismiss
    it. The tablet also shows the day's code.
@@ -134,6 +164,18 @@ lecture hall on university WiFi may share a few public addresses.
 To turn questions on, `tools/make-channel.js` prints a tablet key and puts its
 hash in `presenter-config.js` as `questionsKey`. Without `questionsKey`,
 everything behaves as before.
+
+**The QR code.** Put `<div class="question-qr"></div>` on the slide, and give
+`make-channel.js` the public address of `ask.html` with `--ask` (it becomes
+`askUrl` in the config). The laptop's copy then draws a QR code for
+`ask.html?code=<today's code>` into the element; every other copy leaves it
+empty. Size the element with CSS; the code fills its width. It always points
+at `askUrl`, never at the deck's own address, so it works when you present
+from `localhost`. The drawing is done by the vendored
+[QR Studio](client/vendor/README.md); `qrOptions` in the config is passed to
+it, e.g. `{ moduleStyle: 'rounded', foreground: '#604e25' }`. Its default
+background is transparent, so test a busy slide background with a phone in
+the room.
 
 ## The secret
 
@@ -172,7 +214,8 @@ upgrade) for putting it on a small VPS.
 ## Testing
 
 ```
-npm --prefix server install
+npm install                      # puppeteer and jsqr, for the test
+npm --prefix server install      # socket.io, for the relay
 node tools/e2e-test.js
 ```
 
@@ -186,6 +229,8 @@ The test starts the relay and a local web server. It drives a "laptop" and a
 - that the relay ignores a wrong secret;
 - for audience questions:
   - the code appears only on the laptop;
+  - so does the QR code, which decodes (with jsQR) to the ask page with the
+    day's code, and which pre-fills the code when followed;
   - wrong keys and wrong codes are refused;
   - a question arrives verbatim, with injected HTML shown as plain text;
   - a page without the key overhears nothing;
@@ -197,7 +242,9 @@ Environment variables:
 - `RELAY_URL` tests against an existing relay.
 - `REVEAL_VERSION` swaps the reveal.js version.
 - `PUPPETEER_PATH` points at a puppeteer install, if `require('puppeteer')`
-  fails.
+  fails. Clicks and screenshots need a headless Chrome that renders frames;
+  if they hang while the page itself is fine (seen once with Chrome 148),
+  try another build this way.
 - `SCREENSHOTS=<dir>` saves what the tablet showed.
 
 All checks pass in these setups:
@@ -211,6 +258,10 @@ All checks pass in these setups:
 With the unmodified server, a late-joining tablet catches up within one
 heartbeat (0.7–2.8 s) instead of at once. The test has been checked against a
 reintroduction of the scroll-view bug described in `CLAUDE.md`, and catches it.
+
+`docs/demo.gif` is made by `node tools/make-demo-gif.js`, which drives the same
+setup and needs ImageMagick 7. Remake it after changing how the presenter view
+or the demo deck looks.
 
 ## Limitations
 
@@ -236,6 +287,8 @@ reintroduction of the scroll-view bug described in `CLAUDE.md`, and catches it.
 | `client/presenter-config.example.js` | The shared, public settings: relay URL, channel id, options |
 | `server/relay.js` | The relay, plus `deploy/` for systemd and nginx |
 | `tools/make-channel.js` | Makes a secret and its channel id |
+| `client/vendor/qr-studio.js` | QR Studio, vendored, for the laptop's QR code |
 | `tools/e2e-test.js` | End-to-end test (puppeteer) |
-| `example/index.html` | A demo deck; the only presenter-specific lines are two `<script>` tags |
+| `tools/make-demo-gif.js` | Makes `docs/demo.gif` |
+| `example/index.html` | A demo deck; besides the question code and QR slide, its only presenter-specific lines are two `<script>` tags |
 | `CLAUDE.md` | Integration playbook for a Claude Code agent |

@@ -83,6 +83,11 @@ confirmation. These are outward-facing actions.
 node tools/make-channel.js <relay-url> --write <their>/presenter/presenter-config.js
 ```
 
+For audience questions with a QR code, add `--ask <public URL of ask.html>`; it
+becomes `askUrl`, and the laptop draws the code into any `.question-qr`
+element. It must be the public address, even if the user presents from
+`localhost`, since phones open it.
+
 Give the user the printed secret, and their laptop URL in the form
 `…/deck.html?master=<secret>`. **Never write the secret into a file that is
 published or committed.** The one sanctioned exception is the server-side
@@ -222,6 +227,12 @@ Two cautions:
   A background tab gets none,** so it times out however correct the page is.
   With a "laptop" and a "tablet" open, one is always in the background. Pass
   `{ polling: 200 }`.
+- **Clicks and screenshots need the page to render frames.** `page.click()`
+  scrolls the element into view first, and `page.screenshot()` captures a
+  frame. In one sandbox, headless Chrome 148 rendered none: both hung until
+  the protocol timed out while `evaluate()` still worked. The tests click
+  from inside the page (`clickIn`) for this reason; for screenshots, try
+  another Chrome via `PUPPETEER_PATH`.
 - **A freshly loaded frame sits on slide 1 before the presenter has
   positioned it,** so "current matches laptop" can pass by accident. Also wait
   for the presenter's own slide counter, which changes only after a render.

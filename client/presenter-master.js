@@ -26,6 +26,9 @@
 	}
 	const RELAY = config.relay.replace(/\/+$/, '');
 	const HEARTBEAT_MS = config.heartbeatMs || 3000;
+	// Where this script was loaded from, for finding vendor/qr-studio.js.  Only
+	// available now, while the script first runs.
+	const SCRIPT_URL = (document.currentScript && document.currentScript.src) || location.href;
 
 	// Announce the deck's path without ?master, so the presenter's own copies of
 	// the deck never try to broadcast.
@@ -101,13 +104,40 @@
 		socket.emit('questions-open', { socketId: config.channel, secret: secret, code: questionCode, keyHash: config.questionsKey });
 	}
 
+	// A QR code for the ask page with today's code already filled in, drawn into
+	// any element with class "question-qr", so students need only scan and type.
+	// It must point at the public ask page (askUrl), never at this page's own
+	// address: the laptop may well be serving the deck from localhost.
+	async function drawQR(code) {
+		const targets = document.querySelectorAll('.question-qr');
+		if (!targets.length || !config.askUrl) return;
+		const url = new URL(config.askUrl);
+		url.searchParams.set('code', code);
+		try {
+			const lib = await import(config.qrStudio || new URL('vendor/qr-studio.js', SCRIPT_URL).href);
+			const svg = (lib.default || lib).toString(url.href,
+				Object.assign({ moduleStyle: 'smooth', background: null }, config.qrOptions));
+			targets.forEach(el => {
+				el.innerHTML = svg;
+				el.firstElementChild.style.cssText = 'width: 100%; height: auto; display: block;';
+				el.dataset.url = url.href;
+				el.setAttribute('role', 'img');
+				el.setAttribute('aria-label', 'QR code for ' + url.href);
+			});
+		}
+		catch (e) { console.warn('[presenter] could not draw the question QR code', e); }
+	}
+
 	if (QUESTIONS) {
 		if (window.crypto && crypto.subtle) {
 			deriveCode().then(code => {
 				questionCode = code;
-				const show = () => document.querySelectorAll('.question-code').forEach(e => { e.textContent = code; });
-				show();
-				document.addEventListener('DOMContentLoaded', show);
+				const show = () => {
+					document.querySelectorAll('.question-code').forEach(e => { e.textContent = code; });
+					drawQR(code);
+				};
+				if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', show);
+				else show();
 				openQuestions();
 			});
 			setInterval(openQuestions, 60 * 1000);	// keeps the code from lapsing on the relay

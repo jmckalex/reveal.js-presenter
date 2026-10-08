@@ -9,6 +9,7 @@
     "test": "node tools/e2e-test.js"
   },
   "devDependencies": {
+    "jsqr": "^1.4.0",
     "puppeteer": "^24.0.0"
   }
 }

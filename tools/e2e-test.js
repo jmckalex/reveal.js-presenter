@@ -33,6 +33,12 @@ const VIEWPORTS = [[1180, 820], [820, 1180]];
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css' };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Click from inside the page.  page.click() needs the page to render a frame
+// (it scrolls the element into view first), and in some headless setups none
+// arrives: seen with Chrome 148, where the call hangs until the protocol
+// times out though the page is fine.  element.click() runs the same handlers,
+// including a form's submit.
+const clickIn = (page, selector) => page.$eval(selector, e => e.click());
 const freePort = () => new Promise(resolve => {
 	const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
@@ -71,7 +77,7 @@ function check(ok, name, detail) {
 
 	// Serve the package, with a presenter-config.js generated for this run.
 	// 127.0.0.1 is a secure context, so the laptop script's secret check runs.
-	const config = `window.PresenterConfig = { relay: ${JSON.stringify(relayUrl)}, channel: '${channel}', questionsKey: '${questionsKeyHash}' };`;
+	let config = `window.PresenterConfig = { relay: ${JSON.stringify(relayUrl)}, channel: '${channel}', questionsKey: '${questionsKeyHash}' };`;
 	const site = http.createServer((req, res) => {
 		const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
 		if (pathname === '/client/presenter-config.js') {
@@ -96,6 +102,7 @@ function check(ok, name, detail) {
 	const sitePort = await freePort();
 	await new Promise(r => site.listen(sitePort, '127.0.0.1', r));
 	const SITE = `http://127.0.0.1:${sitePort}`;
+	config = config.replace(' };', `, askUrl: '${SITE}/client/ask.html' };`);
 	console.log(`relay ${relayUrl}${ownRelay ? ' (server/relay.js)' : ''}; reveal.js ${process.env.REVEAL_VERSION || 'as in example/'}`);
 
 	const browser = await puppeteer.launch();
@@ -132,7 +139,7 @@ function check(ok, name, detail) {
 			t.errors = [];
 			t.on('pageerror', e => t.errors.push(e.message));
 			await t.goto(SITE + '/client/presenter.html', { waitUntil: 'domcontentloaded' });
-			await t.click('#start-button');
+			await clickIn(t, '#start-button');
 			return t;
 		};
 		const view = t => t.evaluate(() => {
@@ -252,18 +259,56 @@ function check(ok, name, detail) {
 		const elsewhere = await plain.evaluate(() => document.querySelector('.question-code').textContent);
 		check(elsewhere === '····', 'a deck without ?master does not show the code', elsewhere);
 
+		// The laptop's QR code: decode it with a real QR reader, and follow it as a phone would.
+		await laptop.bringToFront();
+		await laptop.waitForFunction(() => document.querySelector('.question-qr svg'), { polling: 200, timeout: 15000 }).catch(() => {});
+		const qrSvg = await laptop.evaluate(() => { const s = document.querySelector('.question-qr svg'); return s ? s.outerHTML : null; });
+		check(!!qrSvg, 'the laptop deck draws a QR code');
+		const qrElsewhere = await plain.evaluate(() => document.querySelector('.question-qr').innerHTML.trim());
+		check(!qrElsewhere, 'a deck without ?master draws no QR code');
+		let jsQR = null;
+		try { jsQR = require.resolve('jsqr/dist/jsQR.js'); } catch (e) { /* not installed */ }
+		if (!jsQR) console.log('SKIP  decoding the QR code: run npm install in the package root to get jsqr');
+		else if (qrSvg) {
+			const decoder = await browser.newPage();
+			await decoder.addScriptTag({ path: jsQR });
+			const decoded = await decoder.evaluate(svg => new Promise((resolve, reject) => {
+				const img = new Image();
+				img.onload = () => {
+					const c = document.createElement('canvas');
+					c.width = c.height = 600;
+					const g = c.getContext('2d');
+					g.fillStyle = '#fff'; g.fillRect(0, 0, 600, 600); g.drawImage(img, 0, 0, 600, 600);
+					const r = jsQR(g.getImageData(0, 0, 600, 600).data, 600, 600);
+					resolve(r ? r.data : null);
+				};
+				img.onerror = () => reject(new Error('the QR SVG would not load as an image'));
+				img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg.replace('<svg', '<svg width="600" height="600"'));
+			}), qrSvg);
+			const expected = SITE + '/client/ask.html?code=' + code;
+			check(decoded === expected, 'the QR code decodes to the ask page with today’s code', decoded);
+			await decoder.close();
+			if (decoded) {
+				const scanned = await browser.newPage();
+				await scanned.goto(decoded, { waitUntil: 'domcontentloaded' });
+				const prefilled = await scanned.$eval('#code', e => e.value);
+				check(prefilled === code, 'following it opens the ask page with the code filled in', prefilled);
+				await scanned.close();
+			}
+		}
+
 		// The presenter's tablet: a wrong key is refused, the right one accepted.
 		const ipad = await browser.newPage();
 		await ipad.setViewport({ width: 1180, height: 820 });
 		ipad.errors = [];
 		ipad.on('pageerror', e => ipad.errors.push(e.message));
 		await ipad.goto(SITE + '/client/presenter.html', { waitUntil: 'domcontentloaded' });
-		await ipad.click('#start-button');
+		await clickIn(ipad, '#start-button');
 		const qStatus = p => p.$eval('#q-status', e => e.textContent);
 		const enterKey = async key => {
 			await ipad.waitForSelector('#q-keyform:not([hidden])', { timeout: 15000 });
 			await ipad.type('#q-key', key);
-			await ipad.click('#q-keyform button');
+			await clickIn(ipad, '#q-keyform button');
 		};
 		await enterKey('WRONG-KEY');
 		await ipad.waitForFunction(() => document.getElementById('q-status').textContent.includes('not accepted'), { polling: 200, timeout: 15000 });
@@ -288,7 +333,7 @@ function check(ok, name, detail) {
 			await page.type('#code', c);
 			await page.type('#text', text);
 			await page.waitForFunction(() => !document.getElementById('send').disabled, { polling: 100, timeout: 15000 });
-			await page.click('#send');
+			await clickIn(page, '#send');
 			await page.waitForFunction(() => { const s = document.getElementById('status').textContent; return s && s !== 'Sending…'; }, { polling: 100, timeout: 15000 });
 			return page.$eval('#status', e => e.textContent);
 		};

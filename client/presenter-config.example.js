@@ -18,6 +18,15 @@ window.PresenterConfig = {
 	// presenter's tablet enters once to receive them, from tools/make-channel.js.
 	// questionsKey: 'REPLACE-WITH-THE-KEY-HASH',
 
+	// Optional, with questionsKey.  The public address of ask.html.  The laptop
+	// then draws a QR code for it, with today's code filled in, into any element
+	// with class "question-qr".  qrStudio overrides where the QR library is
+	// loaded from (default: vendor/qr-studio.js next to presenter-master.js), and
+	// qrOptions is passed to it (e.g. { foreground: '#604e25' }).
+	// askUrl: 'https://your.site/presenter/ask.html',
+	// qrStudio: '/path/to/qr-studio.js',
+	// qrOptions: { moduleStyle: 'smooth' },
+
 	// Optional.  How often (ms) the laptop re-broadcasts an unchanged position,
 	// so a presenter view that reconnects catches up.  Default 3000.
 	// heartbeatMs: 3000,

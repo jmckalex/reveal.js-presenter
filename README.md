@@ -77,7 +77,7 @@ behave exactly as before, for you and for everyone else.
 Open Claude Code in the project that holds your presentations and say
 something like:
 
-> Add the presenter view from ~/Source/reveal.js-presenter to my decks.
+> Add the presenter view from ~/Source/reveal.js/presenter to my decks.
 
 The agent should read [`CLAUDE.md`](CLAUDE.md) in this directory. It describes
 how to fit the package to different deck setups (plain HTML, templated, ES

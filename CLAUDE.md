@@ -39,6 +39,23 @@ so show it as what the sender typed, never as an identity).
 The ack's `reason` on refusal is one of `closed`, `code`, `invalid`, `slow`,
 `busy`, `offline` or `key`.
 
+Polls add five more, also `server/relay.js` only. A poll is
+`{ id, kind: 'choice', prompt, options: [2–12 labels] }` or
+`{ id, kind: 'number', prompt, min, max, unit }` (integers, `max - min` ≤ 1000):
+
+| Event | Sent by | Carries | Relay checks |
+|---|---|---|---|
+| `'poll-open'` | the laptop, with an ack | `{ socketId, secret, poll }` | the secret and the poll; the ack carries the tally |
+| `'poll-close'` | the laptop | `{ socketId, secret }` | the secret |
+| `'poll-results'` | the laptop, with an ack | `{ socketId, secret, id }` | the secret; the ack carries that poll's tally |
+| `'audience-join'` | a phone, with an ack | `{ channel, code }` | the day's code (questions must be open); the ack carries the open poll or `null` |
+| `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value (an option index or a number in range), the rate limits |
+
+Phones in the audience get `'poll'` with the poll (no tally) when one opens
+and `null` when it closes. The laptop gets `'poll-tally'`
+`{ id, counts, total }` as answers arrive, at most every 300 ms. `voter` is a
+random id the phone keeps, so one phone counts once and may change its answer.
+
 ## Integration procedure
 
 ### 1. Survey the project first
@@ -186,6 +203,11 @@ For audience questions:
     tablet listening, the question is *refused*, not queued, and the student is
     told. Don't add a buffer "for reconnects": that is storage, and the user
     asked for none.
+12a. **Polls keep a tally, and only that.** Counts, plus each phone's current
+    answer under its random id, in memory, forgotten three hours after the
+    poll was last opened; never written or logged, and sent only to
+    connections that prove the secret. (The user chose this so that a laptop
+    reload loses nothing and results can appear on a later slide.)
 13. **Tie the code and the key to the presenter secret.** Only a client that
     proves the secret may set a channel's code and accepted key hash.
     Otherwise anyone with a channel of their own could open questions on

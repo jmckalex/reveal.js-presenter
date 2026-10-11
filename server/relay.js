@@ -18,7 +18,7 @@
  *    wakes up or reconnects catches up at once instead of at the laptop's next
  *    heartbeat.
  *
- * It also carries audience questions; see the second half of this file.
+ * It also carries audience questions and polls; see the rest of this file.
  *
  * Environment: PORT (default 1948), HOST (default 127.0.0.1, i.e. behind a
  * reverse proxy), ALLOWED_ORIGINS (comma-separated; default: any origin, which
@@ -102,6 +102,77 @@ function cleanName(name) {
 	return chars.length > MAX_NAME_LENGTH ? null : chars.join('');
 }
 
+/*
+ * Polls.
+ *
+ * The laptop deck opens a poll when its slide (or fragment) is shown:
+ * 'poll-open' with the presenter secret and the poll's definition.  It closes
+ * it, 'poll-close', when the slide is left.  Phones on the ask page join the
+ * channel's audience with the day's code ('audience-join', the same code the
+ * questions use, so questions must be open), and are sent each poll as it opens
+ * and null as it closes ('poll').  An answer ('poll-answer') is checked against
+ * the open poll and counted.
+ *
+ * Unlike questions, polls keep something: the tally, in memory, so that a
+ * laptop that reloads gets it back and results can be shown on a later slide.
+ * That is anonymous counts, plus each phone's current answer under a random id
+ * the phone made up, so that it can change its answer but not answer twice.
+ * Nothing is written anywhere or logged, the tally goes only to connections
+ * that proved the secret ('poll-tally', 'poll-results'), and a poll is
+ * forgotten POLL_TTL_MS after it was last opened.
+ */
+const POLL_TTL_MS = 3 * 3600 * 1000;
+const MAX_POLLS = 50;						// per channel; the oldest go first
+const MAX_OPTIONS = 12;
+const MAX_NUMBER_RANGE = 1000;				// max - min of a number poll
+const MAX_VOTERS = 10000;					// per poll
+const PER_SOCKET_ANSWER_MS = 1000;			// one answer per page per second
+const ANSWERS_PER_CHANNEL_PER_MIN = 2000;	// a large hall, all at once
+const ANSWERS_PER_ADDRESS_PER_MIN = 1000;	// a hall behind one public address
+const TALLY_EVERY_MS = 300;					// at most this often to the laptop
+
+const polls = new Map();	// channel id -> { current: poll id or null, byId: Map(poll id -> poll) }
+
+const oneLine = (value, max) => typeof value === 'string'
+	? [...value.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim()].slice(0, max).join('') : '';
+
+// The laptop's definition of a poll, checked and reduced to what the phones are
+// sent; null if it is not a valid poll.
+function pollDefinition(p) {
+	if (!p || typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.id)) return null;
+	const prompt = oneLine(p.prompt, 300);
+	if (p.kind === 'choice') {
+		if (!Array.isArray(p.options) || p.options.length < 2 || p.options.length > MAX_OPTIONS) return null;
+		const options = p.options.map(o => oneLine(o, 80));
+		return options.every(Boolean) ? { id: p.id, kind: 'choice', prompt, options } : null;
+	}
+	if (p.kind === 'number') {
+		const { min, max } = p;
+		if (!Number.isInteger(min) || !Number.isInteger(max) || max <= min || max - min > MAX_NUMBER_RANGE) return null;
+		return { id: p.id, kind: 'number', prompt, min, max, unit: oneLine(p.unit, 20) };
+	}
+	return null;
+}
+
+// What the laptop is sent: counts per option, or per value from min to max.
+const tallyOf = poll => ({ id: poll.def.id, counts: [...poll.counts], total: poll.answers.size });
+
+function authenticated(data) {
+	return !!data && typeof data.secret === 'string' && typeof data.socketId === 'string'
+		&& !!data.secret && sha256(data.secret) === data.socketId;
+}
+
+// Send a poll's tally to the laptop, at most every TALLY_EVERY_MS.
+function sendTally(channel, poll) {
+	if (poll.tallyTimer) return;
+	const wait = Math.max(0, (poll.lastTally || 0) + TALLY_EVERY_MS - Date.now());
+	poll.tallyTimer = setTimeout(() => {
+		poll.tallyTimer = null;
+		poll.lastTally = Date.now();
+		io.to('results:' + channel).emit('poll-tally', tallyOf(poll));
+	}, wait);
+}
+
 io.on('connection', socket => {
 	socket.on('multiplex-statechanged', data => {
 		if (!data || typeof data.socketId !== 'string' || typeof data.secret !== 'string' || !data.secret) return;
@@ -155,13 +226,105 @@ io.on('connection', socket => {
 		io.to(room).emit('question', { id: crypto.randomUUID(), text, name, at: Date.now() });
 		ack({ ok: true });
 	});
+
+	// The laptop opens a poll.  Reopening one (back to its slide, or after a
+	// reconnect) keeps its tally, unless its definition has changed.
+	socket.on('poll-open', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		if (!authenticated(data)) return reply({ ok: false, reason: 'secret' });
+		const def = pollDefinition(data.poll);
+		if (!def) return reply({ ok: false, reason: 'invalid' });
+		const channel = data.socketId;
+		if (!polls.has(channel)) polls.set(channel, { current: null, byId: new Map() });
+		const state = polls.get(channel);
+		const key = JSON.stringify(def);
+		let poll = state.byId.get(def.id);
+		if (!poll || poll.key !== key) {
+			const size = def.kind === 'choice' ? def.options.length : def.max - def.min + 1;
+			poll = { def, key, counts: new Array(size).fill(0), answers: new Map() };
+			state.byId.delete(def.id);
+			state.byId.set(def.id, poll);
+			if (state.byId.size > MAX_POLLS) state.byId.delete(state.byId.keys().next().value);
+		}
+		poll.expires = Date.now() + POLL_TTL_MS;
+		socket.join('results:' + channel);
+		if (state.current !== def.id) {
+			state.current = def.id;
+			io.to('audience:' + channel).emit('poll', def);
+		}
+		reply({ ok: true, tally: tallyOf(poll) });
+	});
+
+	socket.on('poll-close', data => {
+		if (!authenticated(data)) return;
+		const state = polls.get(data.socketId);
+		if (!state || state.current === null) return;
+		state.current = null;
+		io.to('audience:' + data.socketId).emit('poll', null);
+	});
+
+	// The laptop asks for a poll's tally: results on a later slide, say.  It
+	// then also receives that poll's updates.
+	socket.on('poll-results', (data, ack) => {
+		if (typeof ack !== 'function') return;
+		if (!authenticated(data)) return ack({ ok: false, reason: 'secret' });
+		socket.join('results:' + data.socketId);
+		const poll = polls.get(data.socketId)?.byId.get(data.id);
+		ack(poll ? { ok: true, tally: tallyOf(poll) } : { ok: false, reason: 'unknown' });
+	});
+
+	// A phone joins the audience with the day's code; the ack carries the poll
+	// open now, if any.
+	socket.on('audience-join', (data, ack) => {
+		if (typeof ack !== 'function') return;
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
+		if (data.code !== entry.code) return ack({ ok: false, reason: 'code' });
+		socket.join('audience:' + data.channel);
+		const state = polls.get(data.channel);
+		const poll = state && state.current !== null ? state.byId.get(state.current) : null;
+		ack({ ok: true, poll: poll ? poll.def : null });
+	});
+
+	let lastAnswer = 0;
+	socket.on('poll-answer', (data, ack) => {
+		if (typeof ack !== 'function') return;
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
+		if (data.code !== entry.code) return ack({ ok: false, reason: 'code' });
+		const state = polls.get(data.channel);
+		const poll = state && typeof data.id === 'string' && state.current === data.id ? state.byId.get(data.id) : null;
+		if (!poll) return ack({ ok: false, reason: 'closed' });
+		const index = typeof data.value !== 'number' ? NaN : poll.def.kind === 'choice' ? data.value : data.value - poll.def.min;
+		if (!Number.isInteger(index) || index < 0 || index >= poll.counts.length) return ack({ ok: false, reason: 'invalid' });
+		if (Date.now() - lastAnswer < PER_SOCKET_ANSWER_MS) return ack({ ok: false, reason: 'slow' });
+		const voter = typeof data.voter === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(data.voter) ? 'v:' + data.voter : 's:' + socket.id;
+		const previous = poll.answers.get(voter);
+		if (previous === undefined && poll.answers.size >= MAX_VOTERS) return ack({ ok: false, reason: 'busy' });
+		if (!withinLimit('pa:' + addressOf(socket), ANSWERS_PER_ADDRESS_PER_MIN)) return ack({ ok: false, reason: 'busy' });
+		if (!withinLimit('pc:' + data.channel, ANSWERS_PER_CHANNEL_PER_MIN)) return ack({ ok: false, reason: 'busy' });
+		lastAnswer = Date.now();
+		if (previous !== undefined) poll.counts[previous]--;
+		poll.answers.set(voter, index);
+		poll.counts[index]++;
+		sendTally(data.channel, poll);
+		ack({ ok: true });
+	});
 });
 
-// Forget lapsed channels and old timestamps.
+// Forget lapsed channels, old timestamps and lapsed polls.
 setInterval(() => {
 	const now = Date.now();
 	for (const [channel, entry] of open) if (entry.expires < now) open.delete(channel);
 	for (const [bucket, times] of recent) if (!times.some(t => now - t < 60 * 1000)) recent.delete(bucket);
+	for (const [channel, state] of polls) {
+		for (const [id, poll] of state.byId) {
+			if (poll.expires >= now) continue;
+			state.byId.delete(id);
+			if (state.current === id) { state.current = null; io.to('audience:' + channel).emit('poll', null); }
+		}
+		if (!state.byId.size) polls.delete(channel);
+	}
 }, 10 * 60 * 1000).unref();
 
 server.listen(PORT, HOST, () => console.log(`reveal.js-presenter relay listening on ${HOST}:${PORT}`));

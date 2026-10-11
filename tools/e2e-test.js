@@ -381,6 +381,80 @@ function check(ok, name, detail) {
 		const longName = await viaRelay({ code, text: 'A question with a long name', name: 'x'.repeat(41) });
 		check(longName.ack && longName.ack.reason === 'invalid' && !longName.got, 'a name over 40 characters is refused', JSON.stringify(longName));
 
+		// Polls, straight to the relay (the example pages have none).
+		console.log('\n--- polls');
+		const P = await student.evaluate(async (secret, channel, code, wrong) => {
+			const sleep = ms => new Promise(r => setTimeout(r, ms));
+			const connect = () => new Promise(r => { const s = io(window.PresenterConfig.relay, { forceNew: true }); s.on('connect', () => r(s)); });
+			const call = (s, event, data) => new Promise(r => s.emit(event, data, r));
+			const out = {};
+			const laptop = await connect();
+			const tallies = [];
+			laptop.on('poll-tally', t => tallies.push(t));
+			out.forged = await call(laptop, 'poll-open', { socketId: channel, secret: 'not-the-secret', poll: { id: 'x', kind: 'choice', options: ['a', 'b'] } });
+			const phones = await Promise.all([connect(), connect(), connect()]);
+			const seen = phones.map(() => []);
+			let phoneTallies = 0;
+			phones.forEach((p, k) => { p.on('poll', d => seen[k].push(d)); p.on('poll-tally', () => phoneTallies++); });
+			out.join = await call(phones[0], 'audience-join', { channel, code });
+			await call(phones[1], 'audience-join', { channel, code });
+			await call(phones[2], 'audience-join', { channel, code });
+			out.joinWrong = await call(await connect(), 'audience-join', { channel, code: wrong });
+
+			const choice = { id: 'colour', kind: 'choice', prompt: 'Which?', options: ['Red', 'Green', 'Blue'] };
+			out.open = await call(laptop, 'poll-open', { socketId: channel, secret, poll: choice });
+			await sleep(300);
+			out.sent = seen.map(s => s.length ? s[s.length - 1].id : null);
+			out.answers = [
+				await call(phones[0], 'poll-answer', { channel, code, id: 'colour', value: 1, voter: 'voter-aaaa1111' }),
+				await call(phones[1], 'poll-answer', { channel, code, id: 'colour', value: 1, voter: 'voter-bbbb2222' }),
+				await call(phones[2], 'poll-answer', { channel, code, id: 'colour', value: 0, voter: 'voter-cccc3333' })
+			];
+			await sleep(1100);		// one answer per page per second
+			out.change = await call(phones[2], 'poll-answer', { channel, code, id: 'colour', value: 2, voter: 'voter-cccc3333' });
+			out.outOfRange = await call(phones[0], 'poll-answer', { channel, code, id: 'colour', value: 7, voter: 'voter-aaaa1111' });
+			out.wrongCode = await call(phones[1], 'poll-answer', { channel, code: wrong, id: 'colour', value: 0 });
+			await sleep(500);
+			out.tally = tallies[tallies.length - 1];
+
+			const hours = { id: 'hours', kind: 'number', prompt: 'How many hours?', min: 0, max: 8, unit: 'h' };
+			out.openNumber = await call(laptop, 'poll-open', { socketId: channel, secret, poll: hours });
+			await sleep(300);
+			out.sentNumber = seen[0][seen[0].length - 1];
+			await sleep(800);
+			out.number = await call(phones[0], 'poll-answer', { channel, code, id: 'hours', value: 3, voter: 'voter-aaaa1111' });
+			out.numberOutOfRange = await call(phones[1], 'poll-answer', { channel, code, id: 'hours', value: 9, voter: 'voter-bbbb2222' });
+			out.oldPoll = await call(phones[2], 'poll-answer', { channel, code, id: 'colour', value: 0, voter: 'voter-cccc3333' });
+
+			laptop.emit('poll-close', { socketId: channel, secret });
+			await sleep(300);
+			out.closedSeen = seen[1][seen[1].length - 1];
+			await sleep(800);
+			out.afterClose = await call(phones[1], 'poll-answer', { channel, code, id: 'hours', value: 2, voter: 'voter-bbbb2222' });
+			out.results = await call(laptop, 'poll-results', { socketId: channel, secret, id: 'colour' });
+			out.reopen = await call(laptop, 'poll-open', { socketId: channel, secret, poll: choice });
+			const late = await connect();
+			out.lateJoin = await call(late, 'audience-join', { channel, code });
+			laptop.emit('poll-close', { socketId: channel, secret });
+			await sleep(300);
+			out.phoneTallies = phoneTallies;
+			[laptop, late, ...phones].forEach(s => s.close());
+			return out;
+		}, secret, channel, code, wrong);
+		const J = x => JSON.stringify(x);
+		check(P.forged && P.forged.reason === 'secret', 'only the secret can open a poll', J(P.forged));
+		check(P.join && P.join.ok && P.join.poll === null && P.joinWrong.reason === 'code', 'phones join the audience with the day’s code, and only with it', J([P.join, P.joinWrong]));
+		check(P.open.ok && J(P.open.tally.counts) === '[0,0,0]' && P.sent.every(id => id === 'colour'), 'opening a poll sends it to every phone', J(P.sent));
+		check(P.answers.every(a => a.ok) && P.change.ok, 'answers are accepted, and a phone may change its answer', J([...P.answers, P.change]));
+		check(P.outOfRange.reason === 'invalid' && P.wrongCode.reason === 'code', 'an impossible answer or a wrong code is refused', J([P.outOfRange, P.wrongCode]));
+		check(P.tally && J(P.tally.counts) === '[0,2,1]' && P.tally.total === 3, 'the laptop gets the tally, one answer per phone', J(P.tally));
+		check(P.openNumber.ok && P.sentNumber && P.sentNumber.id === 'hours' && P.sentNumber.max === 8 && !('counts' in P.sentNumber), 'a number poll replaces it on the phones, without any tally', J(P.sentNumber));
+		check(P.number.ok && P.numberOutOfRange.reason === 'invalid' && P.oldPoll.reason === 'closed', 'numbers are checked against the range; a replaced poll takes no answers', J([P.number, P.numberOutOfRange, P.oldPoll]));
+		check(P.closedSeen === null && P.afterClose.reason === 'closed', 'closing a poll tells the phones, and refuses answers', J([P.closedSeen, P.afterClose]));
+		check(P.results.ok && J(P.results.tally.counts) === '[0,2,1]' && J(P.reopen.tally.counts) === '[0,2,1]', 'the tally survives closing and reopening', J([P.results, P.reopen]));
+		check(P.lateJoin.ok && P.lateJoin.poll && P.lateJoin.poll.id === 'colour', 'a phone joining late is sent the open poll', J(P.lateJoin));
+		check(P.phoneTallies === 0, 'phones never receive the tally', P.phoneTallies);
+
 		if (process.env.SCREENSHOTS) {
 			const other = await browser.newPage();
 			await other.setViewport({ width: 390, height: 760 });
@@ -411,7 +485,7 @@ function check(ok, name, detail) {
 		const r4 = await ask(late, code, 'Is anyone there?');
 		check(r4.includes('wasn’t delivered'), 'with the tablet gone, the student is told it was not delivered', r4);
 
-		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there') && !relayLog.includes('Lovelace'), 'the relay never logs question text or names');
+		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there') && !relayLog.includes('Lovelace') && !relayLog.includes('voter-'), 'the relay never logs question text, names or poll answers');
 		check(ipad.errors.length === 0, 'no errors on the tablet page', ipad.errors.join('; '));
 	}
 

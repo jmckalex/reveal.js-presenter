@@ -11,7 +11,8 @@ an iPad on the lectern (or hold a phone), and it shows:
 reveal.js's own speaker view (the `S` key) opens a popup tied to the laptop's
 browser, so it can't move to another device. This can, and it works when you
 are nowhere near the laptop. Optionally, the audience can send questions to it
-from their phones, by scanning a QR code on a slide.
+from their phones, by scanning a QR code on a slide, and answer live polls,
+whose results the laptop draws on the slides.
 
 ![The laptop deck and the tablet's presenter view side by side, as the laptop steps through the demo deck and a student's question arrives on the tablet](docs/demo.gif)
 
@@ -36,8 +37,11 @@ browser windows:
 
 Step through the deck in the first window; the second follows. On the
 *Questions?* slide, open the QR code's link (or `client/ask.html`) in a third
-window and send a question. When you're done, stop the two servers. The
-generated `client/presenter-config.js` is ignored by git.
+window and send a question. Then carry on through the *Live polls* slides:
+each opens a poll on the ask page, and the laptop draws the answers. Every
+browser counts as one phone, so open the link in a private window or two, or
+in other browsers, to see several answers. When you're done, stop the two
+servers. The generated `client/presenter-config.js` is ignored by git.
 
 Everything here runs on `127.0.0.1`. To use a real tablet, the relay and the
 decks must be reachable from it: see [Doing it by hand](#doing-it-by-hand).
@@ -96,7 +100,9 @@ modules), what to ask you, and the design decisions that must not be
 3. **Install the client.** Put `presenter.html`, `presenter-master.js` and
    `presenter-config.js` together in one directory on the **same site** as
    your decks, e.g. `/presenter/`. The presenter page drives the decks through
-   their JavaScript, which browsers allow only within one origin.
+   their JavaScript, which browsers allow only within one origin. For audience
+   questions and polls, add `ask.html`, `presenter-polls.js`,
+   `presenter-polls.css` and `vendor/` (the QR code) to the same directory.
 4. **Add two lines to every deck**, or once to a shared template, anywhere
    after reveal.js is loaded:
    ```html
@@ -155,7 +161,9 @@ Two keys keep it private:
 **Questions are transient.** The relay hands each one to the tablet's open
 connection and forgets it. Questions are never stored or logged anywhere. If
 the tablet isn't connected, the question is refused, and the student is told
-so. On the tablet, questions live only in the open page.
+so. On the tablet, questions live only in the open page. The one exception is
+a question you choose to *share* with the room (below): the relay keeps that,
+without any name, for three hours.
 
 **Limits:** one question per page every 10 s, and 20 a minute per channel.
 There is also a generous per-address cap; it can't be strict, because a whole
@@ -177,6 +185,170 @@ it, e.g. `{ moduleStyle: 'rounded', foreground: '#604e25' }`. Its default
 background is transparent, so test a busy slide background with a phone in
 the room.
 
+## Live polls
+
+With questions on, a deck can also ask the audience things, and show the
+answers on the slides as they arrive. A poll is an empty element on a slide:
+
+```html
+<div class="poll" data-poll="sleep" data-kind="number" data-min="0" data-max="12"
+     data-unit="hr|hrs" data-prompt="How many hours did you sleep last night?"></div>
+<div class="poll-results" data-poll="sleep"></div>
+```
+
+- While that slide is showing on the laptop (`?master`), the poll is **open**:
+  every phone on the ask page swaps the question form for it ("Live poll"),
+  and a pill at the foot of the laptop's screen counts the answers. If the
+  `.poll` is a fragment, or inside one, the poll opens once it is shown.
+  Leaving the slide closes it.
+- A `.poll-results` with the same `data-poll`, on that slide or any later
+  one, **draws the answers**, live. Make it a fragment to hold it back for a
+  click. It is 280 px tall unless you set `style="height: …"`.
+- With class `overlay`, the chart is instead a card over the slide below its
+  title, with the poll's prompt, as a step of its own where it stands among
+  the slide's fragments; the next click takes it away. That step exists only
+  on the laptop, and the tablet is sent the position without it, so the two
+  stay in line.
+- Each phone answers once and may change its answer while the poll is open.
+  It is counted by a random id kept in its own storage. Poll answers carry no
+  name.
+- **Only the laptop's copy draws anything.** Opened without `?master`, a
+  deck's `.poll` and `.poll-results` stay empty, so an inline chart leaves an
+  empty space (and an empty step, if it is a fragment) in the published copy
+  and on the tablet. Overlays leave nothing.
+
+### The kinds of poll
+
+Lists are separated by `|`. Every poll takes `data-poll` (its id: letters,
+digits, `-` and `_`), `data-prompt` and, optionally, `data-instructions`, a
+line shown on the phones under the "Live poll" title (otherwise a default for
+the kind).
+
+| `data-kind` | Attributes | The phone | The chart |
+|---|---|---|---|
+| `choice` (the default) | `data-options` (2–12); `data-picks="2"`, or `"all"`, for several | buttons; with picks, ticks and Send | a bar per option |
+| `number` | `data-min`, `data-max` (whole numbers, up to a million apart), `data-unit` (`"%"`, or a singular and plural, `"hr\|hrs"`) | a button per value, up to 13 values; a slider, up to 101; else a field to type in | a column per value, or per range of values, with the median and mean |
+| `scale` | `data-statements` (1–12), `data-min` (1), `data-max` (5), `data-labels="Disagree\|Agree"` | stars per statement when `min` is 1, else a row of numbers | a bar per statement divided by rating, with its mean |
+| `premises` | `data-statements` (2–12, the conclusion last, or `data-conclusion="n"`, from 1), `data-labels` (`Accept\|Reject`) | accept or reject each | how many accept each, against the halfway line; it flags the discursive dilemma |
+| `ranking` | `data-options` (2–10) | tap the options in order | the options by average position |
+| `words` | `data-entries` (1–5 per phone), `data-moderate="off"`, `data-filter="off"`, `data-vertical` (the share of words on end, 0–1, default 0.5), `data-colours="shades"` | type words or short phrases | a word cloud of the approved words |
+| `self-others` | `data-options` (`Yes\|No`), `data-target` (from 1), `data-others` (the second question) | your own answer, then a guess at the room's percentage | the share who gave the target answer, against the room's guesses |
+| `points` | `data-options` (2–10), `data-total` (100), `data-unit` | a slider per option; Send once they add up | each option's average, and each answer as a dot |
+| `grid` | `data-items` (1–8), `data-x="Slow\|Fast"`, `data-y="Shallow\|Deep"`, `data-min`, `data-max` (0, 10) | a square per item to tap | each item's average place, and each answer as a dot |
+| `pin` | `data-image`, `data-alt` | tap the picture | a heat map over the picture |
+
+**A word cloud's words wait for the tablet.** They are free text from the
+audience, so each goes first to the tablet, where you tap it (or "Show all
+new") to put it on the screen; the laptop never receives a word you haven't
+shown. With `data-moderate="off"` every word goes straight up, except those
+the relay's word filter catches (swear words and slurs, also spelt "sh1t" or
+"f u c k"): those wait, flagged ⚑. The filter only holds a word, never refuses
+it, so a false alarm costs one tap. The cloud is laid out by
+[d3-cloud](https://github.com/jasondavies/d3-cloud), as in Wordle.
+
+**A pin poll's picture** must be one the phones can load over `https`. A
+relative `data-image` is taken relative to the deck; if the laptop serves the
+deck from `localhost`, the phones are sent the same path on the site of
+`askUrl` instead.
+
+### What a chart can add
+
+On a `.poll-results` (not the `.poll`):
+
+| Attribute | For | Shows |
+|---|---|---|
+| `data-answer` | choice, number | the right answer: an option's text or number (from 1), or a quantity's true value, with how the median guess did (Galton's ox) |
+| `data-display="beauty"` | number | the beauty contest: the guess closest to two-thirds of the average wins (`data-fraction`, default `2/3`); on a 0–100 poll, the levels of reasoning are marked |
+| `data-display="coordination"` | choice, number | the most common answer wins |
+| `data-payoffs="4 0 \| 3 3"` | choice, one pick | a game against the room: a row of payoffs per option (here, the stag hunt); each option's expected payoff against someone picked at random from the room, and the best reply |
+| `data-display="rules"` | ranking | the winner and the full order under plurality, the Borda count, Condorcet and instant runoff |
+| `data-display="dots"` | pin | a dot per answer instead of the heat map |
+| `data-before="<poll>"` | any | before and after: see below |
+
+Two charts of one poll, the second a fragment with `data-answer`, reveal the
+truth on a click.
+
+**Before and after.** `<div class="poll" data-poll="after" data-repeat="before">`
+asks the poll `before` again, with its attributes, as a poll of its own; and
+`<div class="poll-results" data-poll="after" data-before="before">` compares
+the two, phone by phone: a flow of who moved where (one-pick choice), a line
+per phone (number), or each row's average before and after (scale, premises,
+points, ranking). Only phones that answered both count. The relay matches
+phones by aliases it makes afresh each time it starts, so it must not restart
+between the two.
+
+### The pill, the board, reactions and "Lost?"
+
+- **The pill** says "Answer on your phone · 3 answers" while a poll is open.
+  `PresenterConfig.pollPill`, or a poll's `data-pill`, changes it: `"icon"`
+  (the phone icon alone), `"none"`, or your own text, in which `{n}` is the
+  number of answers and `{answers}` is "3 answers". `pollPillPosition`, or
+  `data-pill-position`, moves it: `bottom` (the default), `bottom-left`,
+  `bottom-right`, `top`, `top-left` or `top-right`.
+- **The board.** Each question on the tablet has a **Share** button. A shared
+  question goes, without any name, to every phone ("Questions from the
+  room"), where each phone may vote for it once, and to any
+  `<div class="qa-board" data-top="5"></div>` on the laptop's slides, most
+  votes first. **Answered** on the tablet takes it down. No question reaches
+  the board unless you share it.
+- **Reactions.** `PresenterConfig.reactions` (up to 8 emoji; none by default)
+  puts reaction buttons at the foot of the ask page. Each tap floats up the
+  right of the laptop's screen, and the tablet tallies the last minute's.
+- **"Lost?"** A toggle on the phones (on unless `PresenterConfig.pace` is
+  `false`): the tablet alone shows "Lost: 3 of 41", counted over the last two
+  minutes, red from 15%.
+
+### What is kept
+
+The relay keeps, in memory only and for three hours: each phone's current
+answer to each poll, under its random id; the questions you share, without
+names, with their votes. Nothing is written to disk or logged. The laptop
+receives answers under aliases, never the phones' ids, and a word cloud's
+words only once shown. Questions themselves are still never kept.
+
+### Styling
+
+The charts take their colours from the reveal.js theme (its link, text and
+background colours). To change them, set these on `.reveal` in your deck's
+CSS: `--poll-accent` (bars and borders), `--poll-text`, `--poll-card` (the
+overlay's card and the pill), `--poll-highlight` (right answers, winners,
+marks) and `--poll-colour-1` to `--poll-colour-8` (word clouds, flows, grids).
+
+### Libraries
+
+The ask page's poll controls are [Web Awesome](https://webawesome.com) 3.14
+components (free, MIT), and the laptop lays out word clouds with
+[d3-cloud](https://github.com/jasondavies/d3-cloud) 1.2.9 (BSD-3), loaded only
+by a deck with a word cloud. Both come from jsDelivr by default, at pinned
+versions; `PresenterConfig.webAwesome` and `d3Cloud` point elsewhere, such as
+copies on your own site.
+
+## Settings
+
+All in `presenter-config.js`, which is public: it holds no secret.
+`tools/make-channel.js` writes `relay`, `channel`, `questionsKey` and, given
+`--ask`, `askUrl`; the rest are optional, and
+`client/presenter-config.example.js` describes each.
+
+| Setting | What it does |
+|---|---|
+| `relay` | The relay's URL |
+| `channel` | sha256 of the secret |
+| `questionsKey` | sha256 of the tablet's key; turns on questions, polls and everything after them in this table |
+| `askUrl` | The public address of `ask.html`, for the QR code |
+| `qrStudio`, `qrOptions` | Where the QR library is loaded from, and its options |
+| `reactions` | Up to 8 emoji for the ask page (a list, or a string separated by spaces); none by default |
+| `pace` | `false` hides "Lost?" |
+| `pollPill`, `pollPillPosition` | The pill's text and place (above) |
+| `polls` | `false`: a `?master` deck loads no poll support |
+| `pollsScript`, `pollsStyle` | Where `presenter-polls.js` and `.css` are loaded from (default: beside `presenter-master.js`) |
+| `webAwesome` | Web Awesome's `dist-cdn` directory (default: 3.14.0 on jsDelivr) |
+| `d3Cloud` | d3-cloud's `d3.layout.cloud.js` (default: 1.2.9 on jsDelivr) |
+| `heartbeatMs` | How often the laptop re-broadcasts its position (3000) |
+| `hideInFrames` | Selectors hidden in the tablet's copies of the deck |
+| `deckUrl` | Maps the path a deck announces to the URL the tablet loads |
+| `deck` | The Reveal instance, for an ES-module setup with no global `Reveal` |
+
 ## The secret
 
 `sha256(secret) = channel id`. The channel id is public: it sits in
@@ -192,8 +364,8 @@ instead inject it server-side, as `window.PresenterConfig.secret`, and only when
 
 ## Running the relay
 
-`server/relay.js` is about 60 lines on Socket.IO 4. It speaks the
-reveal/multiplex protocol, with three differences:
+`server/relay.js` runs on Socket.IO 4. It speaks the reveal/multiplex
+protocol, with three differences:
 
 - **It serves no files.** reveal/multiplex's `index.js` also serves its own
   directory as static files, which publishes anything kept there, including
@@ -201,8 +373,9 @@ reveal/multiplex protocol, with three differences:
 - **It remembers each channel's last position.** A tablet that wakes up or
   reconnects catches up immediately, instead of waiting up to 3 s for the next
   heartbeat.
-- **It carries audience questions** (above). Questions need this relay; an
-  unmodified reveal/multiplex server simply ignores them.
+- **It carries audience questions and polls** (above), with the board,
+  reactions and "Lost?". These need this relay; an unmodified
+  reveal/multiplex server simply ignores them.
 
 ```
 cd server && npm install && node relay.js     # PORT=1948, HOST=127.0.0.1 by default
@@ -214,13 +387,18 @@ upgrade) for putting it on a small VPS.
 ## Testing
 
 ```
-npm install                      # puppeteer and jsqr, for the test
+npm install                      # puppeteer and jsqr, for the tests
 npm --prefix server install      # socket.io, for the relay
-node tools/e2e-test.js
+node tools/e2e-test.js           # the presenter view and questions
+node tools/polls-test.js         # polls, through the pages
+node tools/relay-test.js         # the relay's later events, at the socket level
 ```
 
-The test starts the relay and a local web server. It drives a "laptop" and a
-"tablet" through the demo deck in landscape and portrait, and checks:
+Each test starts the relay and, but for `relay-test.js`, a local web server.
+They need the internet, for reveal.js, Web Awesome and d3-cloud from jsDelivr.
+
+`e2e-test.js` drives a "laptop" and a "tablet" through the demo deck in
+landscape and portrait, and checks:
 - the current slide and the next slide or fragment;
 - notes from both `aside.notes` and `data-notes`;
 - the blank-screen badge and the end-of-deck message;
@@ -237,7 +415,28 @@ The test starts the relay and a local web server. It drives a "laptop" and a
   - rate limiting works;
   - an absent tablet is reported to the student;
   - the relay never logs question text.
+- and, at the socket level, the relay's side of polls.
 
+`polls-test.js` drives the demo deck on a laptop with `?master`, the tablet,
+and three phones on the ask page, each in a browser of its own, through the
+*Live polls* slides. It checks:
+- that the deck without `?master` loads no poll code, contacts no relay and
+  draws nothing, before and after the polls run;
+- that each poll opens on the phones, in place of the question form, and
+  closes when its slide is left;
+- that answers reach the laptop's charts (bars, columns with median and mean,
+  the voting rules, the beauty contest, before and after) and the tablet's
+  count;
+- that the overlay is a step only on the laptop, and the tablet is sent the
+  position without it;
+- that a word cloud's words wait for the tablet, and reach the laptop's cloud
+  once shown;
+- the board (share, vote, take down), reactions and "Lost?";
+- that no page logs an error.
+
+`relay-test.js` checks the relay's later events directly: the wide number
+poll, the self-others, points, grid and pin polls, the tablet's poll counts,
+the word filter, the board, reactions and the pace signal.
 Environment variables:
 - `RELAY_URL` tests against an existing relay.
 - `REVEAL_VERSION` swaps the reveal.js version.
@@ -245,15 +444,19 @@ Environment variables:
   fails. Clicks and screenshots need a headless Chrome that renders frames;
   if they hang while the page itself is fine (seen once with Chrome 148),
   try another build this way.
-- `SCREENSHOTS=<dir>` saves what the tablet showed.
+- `SCREENSHOTS=<dir>` saves what the tablet showed (with `polls-test.js`,
+  also the laptop's charts and a phone).
 
-All checks pass in these setups:
+`e2e-test.js` passes in these setups:
 
 | Relay | reveal.js |
 |---|---|
 | `server/relay.js` | 5.2.1 |
 | `server/relay.js` | 6.0.2 |
 | An unmodified reveal/multiplex server (Socket.IO 2.5) | 5.2.1 |
+
+`polls-test.js` passes with `server/relay.js` and reveal.js 5.2.1 and 6.0.2;
+an unmodified reveal/multiplex server has no polls.
 
 With the unmodified server, a late-joining tablet catches up within one
 heartbeat (0.7–2.8 s) instead of at once. The test has been checked against a
@@ -276,20 +479,25 @@ or the demo deck looks.
   very heavy decks on older tablets.
 - **Tested with reveal.js 5 and 6.** reveal.js 4 has the same API and should
   work, but hasn't been tested.
+- **Polls draw only on the laptop.** An inline chart is an empty space in the
+  published deck and on the tablet. Polls need audience questions on, since
+  phones join with the day's code.
 
 ## Files
 
 | Path | What it is |
 |---|---|
 | `client/presenter-master.js` | Laptop side: inert unless `?master=<secret>` |
-| `client/presenter.html` | Tablet side: the presenter view, and incoming questions |
-| `client/ask.html` | The audience's page for sending a question |
+| `client/presenter-polls.js`, `presenter-polls.css` | Laptop side of polls, the board and reactions; loaded by `presenter-master.js` only with `?master` |
+| `client/presenter.html` | Tablet side: the presenter view, incoming questions, word approval, poll counts, the board, "Lost?" and reactions |
+| `client/ask.html` | The audience's page: questions, live polls, the board, reactions and "Lost?" |
 | `client/presenter-config.example.js` | The shared, public settings: relay URL, channel id, options |
 | `server/relay.js` | The relay, plus `deploy/` for systemd and nginx |
 | `tools/make-channel.js` | Makes a secret and its channel id |
 | `client/vendor/qr-studio.js` | QR Studio, vendored, for the laptop's QR code |
 | `tools/e2e-test.js` | End-to-end test (puppeteer) |
+| `tools/polls-test.js` | Polls end to end: laptop, tablet and three phones |
 | `tools/relay-test.js` | The relay's later events at the socket level: the wider poll kinds, the word filter, the board, reactions, the pace signal |
 | `tools/make-demo-gif.js` | Makes `docs/demo.gif` |
-| `example/index.html` | A demo deck; besides the question code and QR slide, its only presenter-specific lines are two `<script>` tags |
+| `example/index.html` | A demo deck; its presenter-specific lines are two `<script>` tags, the question code and QR slide, and empty elements for the polls, their charts and the board |
 | `CLAUDE.md` | Integration playbook for a Claude Code agent |

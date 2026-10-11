@@ -63,10 +63,12 @@ const io = new Server(server, {
  *    presenter secret (proving it owns the channel), the day's 4-digit code
  *    shown on a slide, and sha256 of the key the presenter's tablet will use.
  *  - The tablet listens: 'questions-listen' with the channel and that key.
- *  - Anyone may send: 'question' with the channel, the code and the text.
+ *  - Anyone may send: 'question' with the channel, the code and the text, and
+ *    optionally a name to show with it (unchecked: whatever the sender typed).
  */
 const CODE_TTL_MS = 3 * 3600 * 1000;		// questions close this long after the laptop's last refresh
 const MAX_LENGTH = 280;						// characters
+const MAX_NAME_LENGTH = 40;					// characters
 const PER_SOCKET_MS = 10 * 1000;			// one question per page per 10 s
 const PER_CHANNEL_PER_MIN = 20;				// caps a flood from many pages at once
 const PER_ADDRESS_PER_MIN = 60;				// generous: a lecture hall may share a few public addresses
@@ -91,6 +93,13 @@ function clean(text) {
 	if (typeof text !== 'string') return '';
 	const chars = [...text.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '').replace(/\n{3,}/g, '\n\n').trim()];
 	return chars.length > MAX_LENGTH ? '' : chars.join('');
+}
+
+// A name is one line.  null if it is too long; '' if there is none.
+function cleanName(name) {
+	if (typeof name !== 'string') return '';
+	const chars = [...name.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim()];
+	return chars.length > MAX_NAME_LENGTH ? null : chars.join('');
 }
 
 io.on('connection', socket => {
@@ -134,7 +143,8 @@ io.on('connection', socket => {
 		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
 		if (data.code !== entry.code) return ack({ ok: false, reason: 'code' });
 		const text = clean(data.text);
-		if (!text) return ack({ ok: false, reason: 'invalid' });
+		const name = cleanName(data.name);
+		if (!text || name === null) return ack({ ok: false, reason: 'invalid' });
 		if (Date.now() - lastQuestion < PER_SOCKET_MS) return ack({ ok: false, reason: 'slow' });
 		const room = 'q:' + data.channel;
 		const listeners = io.sockets.adapter.rooms.get(room);
@@ -142,7 +152,7 @@ io.on('connection', socket => {
 		if (!withinLimit('a:' + addressOf(socket), PER_ADDRESS_PER_MIN)) return ack({ ok: false, reason: 'busy' });
 		if (!withinLimit('c:' + data.channel, PER_CHANNEL_PER_MIN)) return ack({ ok: false, reason: 'busy' });
 		lastQuestion = Date.now();
-		io.to(room).emit('question', { id: crypto.randomUUID(), text, at: Date.now() });
+		io.to(room).emit('question', { id: crypto.randomUUID(), text, name, at: Date.now() });
 		ack({ ok: true });
 	});
 });

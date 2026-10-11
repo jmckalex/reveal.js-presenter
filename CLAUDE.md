@@ -31,9 +31,11 @@ Audience questions add three events, all to `server/relay.js` only:
 |---|---|---|---|
 | `'questions-open'` | the laptop, every minute | `{ socketId, secret, code, keyHash }` | `sha256(secret) === socketId` |
 | `'questions-listen'` | the tablet, with an ack | `{ channel, key }` | `sha256(key) === keyHash`; the ack carries the code |
-| `'question'` | anyone, with an ack | `{ channel, code, text }` | the code, the length, the rate limits, and that a tablet is listening |
+| `'question'` | anyone, with an ack | `{ channel, code, text, name? }` | the code, the lengths (text 280, name 40), the rate limits, and that a tablet is listening |
 
-Accepted questions go to the tablet as `'question'` with `{ id, text, at }`.
+Accepted questions go to the tablet as `'question'` with `{ id, text, name, at }`,
+where `name` is `''` unless the sender gave one (on one line; it is unverified,
+so show it as what the sender typed, never as an identity).
 The ack's `reason` on refusal is one of `closed`, `code`, `invalid`, `slow`,
 `busy`, `offline` or `key`.
 

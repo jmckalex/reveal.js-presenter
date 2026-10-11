@@ -357,6 +357,30 @@ function check(ok, name, detail) {
 		const overheard = await stranger.evaluate(() => document.querySelectorAll('#q-list li').length);
 		check(overheard === 0, 'a page without the key receives nothing', overheard + ' question(s) overheard');
 
+		// An optional name, straight to the relay (ask.html sends none): it is
+		// forwarded on one line, '' when absent, and refused when too long.
+		const viaRelay = payload => student.evaluate((payload, channel, key) => new Promise(resolve => {
+			const listener = io(window.PresenterConfig.relay, { forceNew: true });
+			const sender = io(window.PresenterConfig.relay, { forceNew: true });
+			let ack = null, got = null;
+			const done = () => {
+				if (!ack || (ack.ok && !got)) return;
+				listener.close(); sender.close();
+				resolve({ ack, got });
+			};
+			listener.emit('questions-listen', { channel, key }, () => {
+				listener.on('question', q => { if (q.text === payload.text) { got = q; done(); } });
+				sender.emit('question', Object.assign({ channel }, payload), a => { ack = a; done(); });
+			});
+			setTimeout(() => resolve({ ack, got, timedOut: true }), 8000);
+		}), payload, channel, questionsKey);
+		const named = await viaRelay({ code, text: 'A named question', name: '  Ada\n  Lovelace ' });
+		check(named.got && named.got.name === 'Ada Lovelace', 'a name is forwarded with the question, on one line', JSON.stringify(named));
+		const unnamed = await viaRelay({ code, text: 'An unnamed question' });
+		check(unnamed.got && unnamed.got.name === '', 'with no name, the name is empty', JSON.stringify(unnamed));
+		const longName = await viaRelay({ code, text: 'A question with a long name', name: 'x'.repeat(41) });
+		check(longName.ack && longName.ack.reason === 'invalid' && !longName.got, 'a name over 40 characters is refused', JSON.stringify(longName));
+
 		if (process.env.SCREENSHOTS) {
 			const other = await browser.newPage();
 			await other.setViewport({ width: 390, height: 760 });
@@ -387,7 +411,7 @@ function check(ok, name, detail) {
 		const r4 = await ask(late, code, 'Is anyone there?');
 		check(r4.includes('wasn’t delivered'), 'with the tablet gone, the student is told it was not delivered', r4);
 
-		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there'), 'the relay never logs question text');
+		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there') && !relayLog.includes('Lovelace'), 'the relay never logs question text or names');
 		check(ipad.errors.length === 0, 'no errors on the tablet page', ipad.errors.join('; '));
 	}
 

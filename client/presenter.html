@@ -117,6 +117,45 @@
 		.questions form { display: flex; gap: 6px; margin-top: 8px; }
 		.questions form input { flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 6px;
 			border: 1px solid #3a3a3a; background: #111; color: var(--text); }
+		.questions li .q-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
+		.questions li .q-foot time { margin-top: 0; }
+		.questions li .share { font-size: 13px; padding: 2px 9px; }
+		.questions li .share:disabled { color: var(--ok); border-color: var(--ok); opacity: 0.8; }
+
+		/* A word cloud's words, to show or hide (see showCloud); the questions
+		   shared with the room (see showShared). */
+		.cloud { flex: none; max-height: 45%; display: flex; flex-direction: column; min-height: 0;
+			margin-top: 6px; padding-bottom: 8px; border-bottom: 1px solid #3a3a3a; }
+		.cloud-head { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+		.cloud-head .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.cloud-head .what strong { color: var(--text); font-weight: 600; }
+		.cloud-head button { font-size: 13px; padding: 2px 8px; flex: none; }
+		.cloud-head #w-all { border-color: var(--warn); color: var(--warn); }
+		.cloud-words { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+		.cloud-words button { font-size: 17px; padding: 4px 11px; border-radius: 15px; }
+		.cloud-words button.pending { border-color: var(--warn); background: #4a3d1c; }
+		.cloud-words button.shown { border-color: var(--ok); }
+		.cloud-words button.hidden { color: var(--muted); text-decoration: line-through; }
+		.cloud-words button.caught { border-color: var(--bad); background: #4a1f1c; }
+		.cloud-words button.caught::before { content: '⚑ '; color: var(--bad); }
+		.cloud-words .n { color: var(--muted); font-size: 13px; margin-left: 5px; }
+		.cloud .hint { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+		.shared ol { list-style: none; margin: 6px 0 0; padding: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; flex: initial; }
+		.shared li { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid #333; border-radius: 0;
+			background: none; margin: 0; font-size: 16px; line-height: 1.3; }
+		.shared li p { flex: 1; margin: 0; overflow-wrap: anywhere; }
+		.shared .votes { flex: none; min-width: 2.6em; color: var(--warn); font-weight: 600; font-variant-numeric: tabular-nums; }
+		.shared li button { flex: none; font-size: 13px; padding: 2px 8px; }
+
+		/* The latest poll's count (see showPollCount); in the header, the pace
+		   badge and the reactions of the last minute. */
+		.pollcount { flex: none; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: #2a2a2a; font-size: 14px; color: var(--muted); }
+		.pollcount strong { color: var(--text); font-weight: 600; }
+		.pollcount .detail { color: var(--text); font-size: 15px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+		.pollcount.closed { opacity: 0.7; }
+		.pace-badge { padding: 3px 9px; border-radius: 6px; background: var(--warn); color: #000; font-weight: 600; font-size: 14px; white-space: nowrap; }
+		.pace-badge.many { background: var(--bad); color: #fff; }
+		.reacts { font-size: 15px; white-space: nowrap; overflow: hidden; max-width: 40vw; }
 
 		.start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
 			gap: 14px; background: rgba(0, 0, 0, 0.8); text-align: center; padding: 24px; }
@@ -129,6 +168,8 @@
 		<span class="status" id="status"><span class="dot"></span><span id="status-text">Connecting…</span></span>
 		<span class="title" id="title"></span>
 		<span class="spacer"></span>
+		<span class="reacts" id="reacts" hidden title="Reactions in the last minute"></span>
+		<span class="pace-badge" id="pace-badge" hidden></span>
 		<button id="smaller" aria-label="Smaller notes">A−</button>
 		<button id="larger" aria-label="Larger notes">A+</button>
 	</header>
@@ -167,6 +208,23 @@
 					<input id="q-key" type="password" placeholder="Questions key" autocomplete="off" autocapitalize="characters" spellcheck="false">
 					<button type="submit">Connect</button>
 				</form>
+				<div class="pollcount" id="p-panel" hidden aria-live="polite">
+					<div class="what" id="p-what"></div>
+					<div class="detail" id="p-detail"></div>
+				</div>
+				<div class="cloud shared" id="b-panel" hidden aria-label="Questions shared with the room">
+					<div class="cloud-head"><span class="what" id="b-what"></span></div>
+					<ol id="b-list"></ol>
+				</div>
+				<div class="cloud" id="w-panel" hidden aria-label="Word cloud to approve">
+					<div class="cloud-head">
+						<span class="what" id="w-what"></span>
+						<button id="w-all" type="button" hidden>Show all new</button>
+						<button id="w-close" type="button" title="Hide this until new words arrive">Hide</button>
+					</div>
+					<div class="cloud-words" id="w-words"></div>
+					<p class="hint" id="w-hint"></p>
+				</div>
 				<ol id="q-list"></ol>
 				<p class="hint" id="q-empty">No questions yet.  Tap a question to dismiss it.</p>
 			</section>
@@ -370,6 +428,11 @@
 			});
 			socket.on('disconnect', () => { updateStatus(); setQuestionStatus('Questions: reconnecting…'); });
 			socket.on('question', addQuestion);
+			socket.on('poll-words', showCloud);
+			socket.on('poll-count', showPollCount);
+			socket.on('board', showShared);
+			socket.on('reaction', countReaction);
+			socket.on('pace', showPace);
 			updateStatus();
 		};
 
@@ -377,7 +440,9 @@
 		//
 		// The laptop opens questions on the relay; this page listens with a key
 		// entered once and remembered on this device.  Questions live only in this
-		// page: nothing is stored, and a reload starts with an empty list.
+		// page: nothing is stored, and a reload starts with an empty list.  Only a
+		// question shared with the room (its Share button) is kept, by the relay,
+		// for the phones to vote on.
 
 		const QUESTIONS = /^[0-9a-f]{64}$/.test(config.questionsKey || '');
 		const KEY_STORE = 'presenter-questions-key';
@@ -444,7 +509,17 @@
 			text.textContent = q.text;			// never innerHTML: this is anonymous input
 			const time = document.createElement('time');
 			time.dataset.at = Number(q.at) || Date.now();
-			item.append(text, time);
+			// Share: put it on the board, for the room to vote on.
+			const share = document.createElement('button');
+			share.type = 'button';
+			share.className = 'share';
+			share.textContent = 'Share';
+			share.title = 'Put this on the board, for the room to vote on';
+			share.addEventListener('click', e => { e.stopPropagation(); shareQuestion(q.text, share); });
+			const foot = document.createElement('div');
+			foot.className = 'q-foot';
+			foot.append(time, share);
+			item.append(text, foot);
 			item.className = 'fresh';
 			item.addEventListener('click', () => { item.remove(); updateQuestionCount(); });
 			$('q-list').prepend(item);
@@ -462,6 +537,150 @@
 		}
 
 		$('q-clear').addEventListener('click', () => { $('q-list').replaceChildren(); updateQuestionCount(); });
+
+		// ---- A word cloud's words (a words poll on the laptop deck)
+		//
+		// The relay sends this page every word a phone gives, grouped, with how
+		// many gave it; none reaches the screen until shown here.  Tap a word
+		// to show it, or to hide it again; "Show all new" shows every word not
+		// yet decided.  "Hide" puts the panel away until a new word arrives.
+		// A word the relay's filter caught is flagged ⚑ and held even in a
+		// cloud that otherwise shows every word at once.
+
+		let cloud = null, cloudPutAway = null;	// the latest message; the poll id and word keys when put away
+		function showCloud(m) {
+			if (!m || typeof m.id !== 'string' || !Array.isArray(m.words)) return;
+			cloud = m;
+			const pending = m.words.filter(w => w.status === 'pending');
+			if (cloudPutAway && cloudPutAway.id === m.id && pending.every(w => cloudPutAway.keys.has(w.key))) { $('w-panel').hidden = true; return; }
+			cloudPutAway = null;
+			$('w-panel').hidden = false;
+			const shown = m.words.filter(w => w.status === 'shown').length;
+			const prompt = document.createElement('strong');
+			prompt.textContent = m.prompt || m.id;
+			$('w-what').replaceChildren('Word cloud: ', prompt, ` · ${m.open ? 'open' : 'closed'} · ${pending.length} new, ${shown} shown`);
+			$('w-all').hidden = pending.length === 0;
+			$('w-all').textContent = `Show all new (${pending.length})`;
+			$('w-words').replaceChildren(...m.words.map(w => {
+				const b = document.createElement('button');
+				b.type = 'button';
+				b.className = w.status;
+				b.textContent = w.word;				// never innerHTML: this is what the audience typed
+				b.title = w.status === 'shown' ? 'Shown: tap to hide' : w.status === 'hidden' ? 'Hidden: tap to show' : 'New: tap to show';
+				if (w.caught) {
+					b.classList.add('caught');
+					b.title = 'Held by the word filter: ' + b.title.toLowerCase();
+				}
+				if (w.n > 1) {
+					const n = document.createElement('span');
+					n.className = 'n';
+					n.textContent = '×' + w.n;
+					b.append(n);
+				}
+				b.addEventListener('click', () => moderate({ word: w.key, status: w.status === 'shown' ? 'hidden' : 'shown' }));
+				return b;
+			}));
+			$('w-hint').textContent = !m.words.length ? (m.moderated ? 'Words appear here as they arrive; tap one to put it on the screen.' : 'Words go straight to the screen; tap one to hide it.')
+				: m.moderated ? 'Tap a word to show it on the screen, or to hide it.'
+				: m.words.some(w => w.caught && w.status === 'pending') ? 'Words go straight to the screen, except those the filter flagged (⚑): tap one to show it, or any word to hide it.'
+				: 'This poll shows every word at once; tap one to hide it.';
+		}
+
+		function moderate(change) {
+			if (!cloud || !socket || !socket.connected || !questionsKey) return;
+			socket.emit('poll-moderate', Object.assign({ channel: CHANNEL, key: questionsKey, id: cloud.id }, change), res => {
+				if (!res || !res.ok) $('w-hint').textContent = 'That didn’t go through (' + ((res && res.reason) || 'no reply') + ').  Try again.';
+			});
+		}
+		$('w-all').addEventListener('click', () => moderate({ all: true, status: 'shown' }));
+		$('w-close').addEventListener('click', () => {
+			if (cloud) cloudPutAway = { id: cloud.id, keys: new Set(cloud.words.map(w => w.key)) };
+			$('w-panel').hidden = true;
+		});
+
+		// ---- The latest poll: how many have answered, and how it stands, so the
+		// presenter can see without turning to the screen.
+
+		function showPollCount(m) {
+			if (!m || typeof m.id !== 'string') return;
+			// Only one poll is open at a time, so another one opening has closed
+			// the word cloud (the relay says so only when a cloud is closed outright).
+			if (cloud && cloud.open && m.open && m.id !== cloud.id) showCloud(Object.assign({}, cloud, { open: false }));
+			const prompt = document.createElement('strong');
+			prompt.textContent = m.prompt || m.id;
+			$('p-what').replaceChildren(`${m.open ? 'Poll open' : 'Poll closed'}: `, prompt, ` · ${m.total} answer${m.total === 1 ? '' : 's'}`);
+			const detail = $('p-detail');
+			if (Array.isArray(m.options) && Array.isArray(m.counts)) detail.textContent = m.options.map((o, k) => `${o} ${m.counts[k]}`).join(' · ');
+			else if (typeof m.median === 'number') {
+				const unit = (m.unit || '').split('|').pop();
+				detail.textContent = `median ${m.median}${unit ? ' ' + unit : ''} · mean ${m.mean}${unit ? ' ' + unit : ''}`;
+			}
+			else detail.textContent = '';
+			$('p-panel').hidden = false;
+			$('p-panel').classList.toggle('closed', !m.open);
+		}
+
+		// ---- The board: questions shared from here, which the room votes on.
+		// "Share" on a question puts it there; "Answered" takes it down.
+
+		function shareQuestion(text, button) {
+			if (!socket || !socket.connected || !questionsKey) return;
+			button.disabled = true;
+			socket.emit('board-share', { channel: CHANNEL, key: questionsKey, text: text }, res => {
+				button.textContent = res && res.ok ? 'Shared' : 'Not shared';
+				if (!(res && res.ok)) button.disabled = false;
+			});
+		}
+
+		function showShared(b) {
+			if (!b || !Array.isArray(b.items)) return;
+			$('b-panel').hidden = !b.items.length;
+			$('b-what').textContent = `Shared with the room · ${b.items.length} · most votes first`;
+			$('b-list').replaceChildren(...b.items.map(item => {
+				const li = document.createElement('li');
+				const votes = document.createElement('span');
+				votes.className = 'votes';
+				votes.textContent = '▲ ' + item.votes;
+				const text = document.createElement('p');
+				text.textContent = item.text;			// never innerHTML: what someone in the audience typed
+				const done = document.createElement('button');
+				done.type = 'button';
+				done.textContent = 'Answered';
+				done.title = 'Take it off the board';
+				done.addEventListener('click', () => {
+					if (socket && socket.connected) socket.emit('board-remove', { channel: CHANNEL, key: questionsKey, id: item.id }, () => {});
+				});
+				li.append(votes, text, done);
+				return li;
+			}));
+		}
+
+		// ---- How many have said they are lost (the ask page's "Lost?"), over
+		// the last two minutes; and the reactions of the last minute.
+
+		function showPace(m) {
+			if (!m || typeof m.lost !== 'number') return;
+			const badge = $('pace-badge');
+			badge.hidden = !m.lost;
+			badge.textContent = `Lost: ${m.lost}` + (m.audience ? ` of ${m.audience}` : '');
+			badge.classList.toggle('many', m.audience > 0 && m.lost / m.audience >= 0.15);
+			badge.title = 'Phones whose owners said they were lost in the last two minutes, out of those on the ask page';
+		}
+
+		const reactions = [];		// [emoji, time]
+		function countReaction(r) {
+			if (!r || typeof r.emoji !== 'string' || r.emoji.length > 16) return;
+			reactions.push([r.emoji, Date.now()]);
+			showReactions();
+		}
+		function showReactions() {
+			while (reactions.length && Date.now() - reactions[0][1] > 60000) reactions.shift();
+			const counts = new Map();
+			reactions.forEach(([e]) => counts.set(e, (counts.get(e) || 0) + 1));
+			$('reacts').textContent = [...counts].map(([e, n]) => `${e} ${n}`).join('  ');
+			$('reacts').hidden = !counts.size;
+		}
+
 		script.onerror = () => { relayFailed = true; updateStatus(); };
 		document.head.appendChild(script);
 
@@ -486,6 +705,7 @@
 			$('timer').textContent = format(elapsed());
 			updateStatus();
 			if (QUESTIONS) updateQuestionTimes();
+			if (reactions.length) showReactions();
 		}
 		setInterval(tick, 500);
 		tick();

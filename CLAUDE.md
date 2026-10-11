@@ -40,8 +40,9 @@ The ack's `reason` on refusal is one of `closed`, `code`, `invalid`, `slow`,
 `busy`, `offline` or `key`.
 
 Polls add five more, also `server/relay.js` only. A poll is
-`{ id, kind: 'choice', prompt, options: [2–12 labels] }` or
-`{ id, kind: 'number', prompt, min, max, unit }` (integers, `max - min` ≤ 1000):
+`{ id, kind: 'choice', prompt, instructions, options: [2–12 labels] }` or
+`{ id, kind: 'number', prompt, instructions, min, max, unit }` (integers, `max - min` ≤ 1000).
+`instructions` is optional: one line telling the audience what to do, `''` if none:
 
 | Event | Sent by | Carries | Relay checks |
 |---|---|---|---|

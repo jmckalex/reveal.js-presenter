@@ -417,7 +417,7 @@ function check(ok, name, detail) {
 			await sleep(500);
 			out.tally = tallies[tallies.length - 1];
 
-			const hours = { id: 'hours', kind: 'number', prompt: 'How many hours?', min: 0, max: 8, unit: 'h' };
+			const hours = { id: 'hours', kind: 'number', prompt: 'How many hours?', instructions: 'Tap\none.', min: 0, max: 8, unit: 'h' };
 			out.openNumber = await call(laptop, 'poll-open', { socketId: channel, secret, poll: hours });
 			await sleep(300);
 			out.sentNumber = seen[0][seen[0].length - 1];
@@ -448,7 +448,7 @@ function check(ok, name, detail) {
 		check(P.answers.every(a => a.ok) && P.change.ok, 'answers are accepted, and a phone may change its answer', J([...P.answers, P.change]));
 		check(P.outOfRange.reason === 'invalid' && P.wrongCode.reason === 'code', 'an impossible answer or a wrong code is refused', J([P.outOfRange, P.wrongCode]));
 		check(P.tally && J(P.tally.counts) === '[0,2,1]' && P.tally.total === 3, 'the laptop gets the tally, one answer per phone', J(P.tally));
-		check(P.openNumber.ok && P.sentNumber && P.sentNumber.id === 'hours' && P.sentNumber.max === 8 && !('counts' in P.sentNumber), 'a number poll replaces it on the phones, without any tally', J(P.sentNumber));
+		check(P.openNumber.ok && P.sentNumber && P.sentNumber.id === 'hours' && P.sentNumber.max === 8 && P.sentNumber.instructions === 'Tap one.' && !('counts' in P.sentNumber), 'a number poll replaces it on the phones, without any tally', J(P.sentNumber));
 		check(P.number.ok && P.numberOutOfRange.reason === 'invalid' && P.oldPoll.reason === 'closed', 'numbers are checked against the range; a replaced poll takes no answers', J([P.number, P.numberOutOfRange, P.oldPoll]));
 		check(P.closedSeen === null && P.afterClose.reason === 'closed', 'closing a poll tells the phones, and refuses answers', J([P.closedSeen, P.afterClose]));
 		check(P.results.ok && J(P.results.tally.counts) === '[0,2,1]' && J(P.reopen.tally.counts) === '[0,2,1]', 'the tally survives closing and reopening', J([P.results, P.reopen]));

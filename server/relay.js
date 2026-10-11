@@ -141,15 +141,16 @@ const oneLine = (value, max) => typeof value === 'string'
 function pollDefinition(p) {
 	if (!p || typeof p.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(p.id)) return null;
 	const prompt = oneLine(p.prompt, 300);
+	const instructions = oneLine(p.instructions, 300);		// what to do, shown above the poll; '' if none
 	if (p.kind === 'choice') {
 		if (!Array.isArray(p.options) || p.options.length < 2 || p.options.length > MAX_OPTIONS) return null;
 		const options = p.options.map(o => oneLine(o, 80));
-		return options.every(Boolean) ? { id: p.id, kind: 'choice', prompt, options } : null;
+		return options.every(Boolean) ? { id: p.id, kind: 'choice', prompt, instructions, options } : null;
 	}
 	if (p.kind === 'number') {
 		const { min, max } = p;
 		if (!Number.isInteger(min) || !Number.isInteger(max) || max <= min || max - min > MAX_NUMBER_RANGE) return null;
-		return { id: p.id, kind: 'number', prompt, min, max, unit: oneLine(p.unit, 20) };
+		return { id: p.id, kind: 'number', prompt, instructions, min, max, unit: oneLine(p.unit, 20) };
 	}
 	return null;
 }

@@ -204,7 +204,7 @@ function check(ok, name, detail) {
 		check((await view(tablet)).badge.includes('Screen blanked'), 'blanking the screen shows a badge');
 		await laptop.evaluate(() => Reveal.togglePause(false));
 
-		await laptop.evaluate(() => Reveal.slide(5, 0));
+		await laptop.evaluate(() => Reveal.slide(Reveal.getHorizontalSlides().length - 1, 0));
 		await follows(tablet);
 		check((await view(tablet)).end, 'last slide shows "End of presentation"');
 
@@ -381,7 +381,7 @@ function check(ok, name, detail) {
 		const longName = await viaRelay({ code, text: 'A question with a long name', name: 'x'.repeat(41) });
 		check(longName.ack && longName.ack.reason === 'invalid' && !longName.got, 'a name over 40 characters is refused', JSON.stringify(longName));
 
-		// Polls, straight to the relay (the example pages have none).
+		// Polls, straight to the relay (tools/polls-test.js drives them through the pages).
 		console.log('\n--- polls');
 		const P = await student.evaluate(async (secret, channel, code, wrong) => {
 			const sleep = ms => new Promise(r => setTimeout(r, ms));

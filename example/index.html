@@ -1,8 +1,12 @@
 <!doctype html>
 <!--
 	A small deck for trying reveal.js-presenter, and the one tools/e2e-test.js
-	drives.  The only presenter-specific lines are the two <script> tags marked
-	below; everything else is an ordinary reveal.js deck.
+	and tools/polls-test.js drive.  The only presenter-specific lines are the two
+	<script> tags marked below, and the empty elements that the laptop's copy
+	(?master=<secret>) fills in: the question code, the QR code, the polls
+	(.poll), their charts (.poll-results) and the board (.qa-board).  Opened
+	without ?master, the deck is an ordinary reveal.js deck, and those elements
+	stay empty.
 -->
 <html lang="en">
 <head>
@@ -57,6 +61,84 @@
 				<p style="font-size: 2.5em; letter-spacing: 0.15em;"><span class="question-code">····</span></p>
 				<!-- Also laptop-only: a QR code for ask.html with today's code filled in. -->
 				<div class="question-qr" style="width: 220px; margin: 0 auto;"></div>
+			</section>
+
+			<!--
+				Live polls.  Each .poll is open on the phones while its slide is
+				showing on the laptop; each .poll-results draws its answers there.
+				Every other copy of the deck leaves both empty.
+			-->
+			<section id="poll-choice">
+				<h2>Live polls</h2>
+				<div class="poll" data-poll="tea-or-coffee" data-kind="choice" data-options="Tea|Coffee|Neither"
+					data-prompt="Tea or coffee?"></div>
+				<p>While this slide is up, the phones on the ask page show a poll.</p>
+				<p class="fragment">The pill at the foot of the screen counts the answers.</p>
+				<!-- An overlay: on the laptop only, a step of its own, between the lines above and below. -->
+				<div class="poll-results overlay" data-poll="tea-or-coffee"></div>
+				<p class="fragment">The click after the chart takes it away again.</p>
+				<aside class="notes">
+					On the laptop, the click after the second line brings up the results over
+					the slide, and the next one takes them away and shows the last line. This
+					view leaves out the chart’s step, so it stays in line with the laptop.
+				</aside>
+			</section>
+
+			<section id="poll-number">
+				<h2>A number</h2>
+				<div class="poll" data-poll="sleep" data-kind="number" data-min="0" data-max="12" data-unit="hr|hrs"
+					data-prompt="How many hours did you sleep last night?" data-instructions="Round to the nearest hour."></div>
+				<div class="poll-results" data-poll="sleep" style="height: 360px;"></div>
+				<aside class="notes">The median and the mean are under the chart.</aside>
+			</section>
+
+			<section id="poll-words">
+				<h2>A word cloud</h2>
+				<div class="poll" data-poll="one-word" data-kind="words" data-entries="2"
+					data-prompt="One or two words for this talk so far"></div>
+				<div class="poll-results" data-poll="one-word" style="height: 400px;"></div>
+				<aside class="notes">
+					Words reach the screen only once you approve them, here on the tablet:
+					tap a word, or “Show all new”.
+				</aside>
+			</section>
+
+			<section id="poll-ranking">
+				<h2>Which voting rule?</h2>
+				<div class="poll" data-poll="lunch" data-kind="ranking" data-options="Pizza|Curry|Salad|Sushi"
+					data-prompt="Rank these for a group lunch, your favourite first"></div>
+				<div class="poll-results" data-poll="lunch" data-display="rules" style="height: 340px;"></div>
+				<aside class="notes">The same ballots, counted four ways. They need not agree.</aside>
+			</section>
+
+			<section id="poll-before">
+				<h2>Before the argument</h2>
+				<div class="poll" data-poll="vote-at-16" data-kind="choice" data-options="Yes|No|Not sure"
+					data-prompt="Should the voting age be lowered to 16?"></div>
+				<div class="poll-results" data-poll="vote-at-16" style="height: 260px;"></div>
+			</section>
+
+			<section id="poll-after">
+				<h2>After the argument</h2>
+				<!-- The same question again, as a poll of its own; the chart follows each phone from one answer to the other. -->
+				<div class="poll" data-poll="vote-at-16-again" data-repeat="vote-at-16"></div>
+				<div class="poll-results" data-poll="vote-at-16-again" data-before="vote-at-16" style="height: 380px;"></div>
+				<aside class="notes">Only phones that answered both times are counted.</aside>
+			</section>
+
+			<section id="poll-beauty">
+				<h2>A game</h2>
+				<div class="poll" data-poll="beauty-contest" data-kind="number" data-min="0" data-max="100"
+					data-prompt="Guess a whole number from 0 to 100. The guess closest to two-thirds of the average wins."></div>
+				<p>Keynes’s beauty contest: the guess closest to ⅔ of the average wins.</p>
+				<div class="poll-results fragment" data-poll="beauty-contest" data-display="beauty" style="height: 340px;"></div>
+				<aside class="notes">Click to show the answers, the average, the target and the winners.</aside>
+			</section>
+
+			<section id="board-slide">
+				<h2>Questions from the room</h2>
+				<p>Shared from the tablet; the audience votes on their phones.</p>
+				<div class="qa-board" data-top="5"></div>
 			</section>
 
 			<section>

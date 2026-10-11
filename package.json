@@ -6,7 +6,9 @@
   "scripts": {
     "relay": "node server/relay.js",
     "channel": "node tools/make-channel.js",
-    "test": "node tools/e2e-test.js"
+    "test": "node tools/e2e-test.js",
+    "test:polls": "node tools/polls-test.js",
+    "test:relay": "node tools/relay-test.js"
   },
   "devDependencies": {
     "jsqr": "^1.4.0",

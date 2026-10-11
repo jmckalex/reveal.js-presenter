@@ -289,6 +289,7 @@ or the demo deck looks.
 | `tools/make-channel.js` | Makes a secret and its channel id |
 | `client/vendor/qr-studio.js` | QR Studio, vendored, for the laptop's QR code |
 | `tools/e2e-test.js` | End-to-end test (puppeteer) |
+| `tools/relay-test.js` | The relay's later events at the socket level: the wider poll kinds, the word filter, the board, reactions, the pace signal |
 | `tools/make-demo-gif.js` | Makes `docs/demo.gif` |
 | `example/index.html` | A demo deck; besides the question code and QR slide, its only presenter-specific lines are two `<script>` tags |
 | `CLAUDE.md` | Integration playbook for a Claude Code agent |

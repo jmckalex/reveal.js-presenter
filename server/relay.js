@@ -114,26 +114,35 @@ function cleanName(name) {
  * the open poll's kind and kept, one per phone, replacing any earlier one.
  *
  * Kinds, and the answer each takes:
- *   choice    an option's index; with picks > 1, a list of up to picks indices
- *   number    an integer from min to max
- *   scale     a list: for each statement, an integer from min to max
- *   premises  a list: for each statement, 1 (accepted) or 0 (rejected)
- *   ranking   a list: every option's index, first choice first
- *   words     a list of up to entries short texts (an empty list withdraws)
+ *   choice       an option's index; with picks > 1, a list of up to picks indices
+ *   number       an integer from min to max
+ *   scale        a list: for each statement, an integer from min to max
+ *   premises     a list: for each statement, 1 (accepted) or 0 (rejected)
+ *   ranking      a list: every option's index, first choice first
+ *   words        a list of up to entries short texts (an empty list withdraws)
+ *   self-others  [an option's index, a percentage]: the phone's own answer,
+ *                and its guess at the share of the room giving options[target]
+ *   points       a list: for each option, the points given it, adding up to total
+ *   grid         a list: for each item, [x, y], each an integer from min to max
+ *   pin          [x, y], each from 0 to 1000: a point on the image, in
+ *                thousandths of its width and height
  *
  * Unlike questions, polls keep something: each phone's current answer, in
  * memory, under a random id the phone made up, so that it can change its
  * answer but not answer twice, and so that a laptop that reloads gets the
  * results back.  The laptop ('poll-tally', 'poll-results', for connections
- * that proved the secret) is sent counts for choice and number polls, and,
- * for every kind but words, each answer under an alias: the same for a phone
- * across the channel's polls, so that answers can be compared, but not its id.
- * A word cloud's words are free text, so they go first to the tablet that
- * holds the questions key ('poll-words'), which shows or hides each
- * ('poll-moderate'); the laptop is sent only the shown words and their counts.
- * A poll can opt out of that (moderated: false), when every word is shown.
- * Nothing is written anywhere or logged, and a poll is forgotten POLL_TTL_MS
- * after it was last opened.
+ * that proved the secret) is sent counts for choice polls, and number polls
+ * of up to MAX_COUNTED_RANGE values, and, for every kind but words, each
+ * answer under an alias: the same for a phone across the channel's polls, so
+ * that answers can be compared, but not its id.  A word cloud's words are
+ * free text, so they go first to the tablet that holds the questions key
+ * ('poll-words'), which shows or hides each ('poll-moderate'); the laptop is
+ * sent only the shown words and their counts.  A poll can opt out of that
+ * (moderated: false), when every word is shown at once, except those that
+ * the word filter catches (unless filter: false), which wait for the tablet
+ * as in a moderated poll.  The tablet also hears how many have answered the
+ * latest poll ('poll-count').  Nothing is written anywhere or logged, and a
+ * poll is forgotten POLL_TTL_MS after it was last opened.
  */
 const POLL_TTL_MS = 3 * 3600 * 1000;
 const MAX_POLLS = 50;						// per channel; the oldest go first
@@ -141,7 +150,14 @@ const MAX_OPTIONS = 12;						// in a choice poll
 const MAX_RANKED = 10;						// options in a ranking poll
 const MAX_STATEMENTS = 12;					// in a scale or premises poll
 const MAX_SCALE_RANGE = 10;					// max - min of a scale
-const MAX_NUMBER_RANGE = 1000;				// max - min of a number poll
+const MAX_NUMBER_RANGE = 1000000;			// max - min of a number poll (a guess at a quantity can be wide)
+const MAX_COUNTED_RANGE = 1000;				// a number poll's counts per value are sent only up to this range
+const MAX_SELF_OPTIONS = 6;					// in a self-others poll
+const MAX_POINT_OPTIONS = 10;				// in a points poll
+const MAX_POINTS = 1000;					// a points poll's total
+const MAX_GRID_ITEMS = 8;					// in a grid poll
+const MAX_GRID_RANGE = 100;					// max - min of a grid's axes
+const PIN_SCALE = 1000;						// a pin's coordinates run from 0 to this
 const MAX_ENTRIES = 5;						// words per phone in a word cloud
 const MAX_WORD_LENGTH = 30;					// characters
 const MAX_WORDS = 500;						// different words in one word cloud
@@ -182,6 +198,30 @@ function pollDefinition(p) {
 		if (!Number.isInteger(min) || !Number.isInteger(max) || max <= min || max - min > MAX_NUMBER_RANGE) return null;
 		return { ...base, min, max, unit: oneLine(p.unit, 20) };
 	}
+	case 'self-others': {
+		const options = p.options === undefined ? ['Yes', 'No'] : texts(p.options, 2, MAX_SELF_OPTIONS, 80);
+		const target = p.target ?? 0;
+		if (!options || !isInt(target, 0, options.length - 1)) return null;
+		return { ...base, options, target, others: oneLine(p.others, 300) };
+	}
+	case 'points': {
+		const options = texts(p.options, 2, MAX_POINT_OPTIONS, 80);
+		const total = p.total ?? 100;
+		if (!options || !isInt(total, 2, MAX_POINTS)) return null;
+		return { ...base, options, total, unit: oneLine(p.unit, 20) };
+	}
+	case 'grid': {
+		const items = texts(p.items, 1, MAX_GRID_ITEMS, 120);
+		const min = p.min ?? 0, max = p.max ?? 10;
+		if (!items || !Number.isInteger(min) || !Number.isInteger(max) || max <= min || max - min > MAX_GRID_RANGE) return null;
+		const ends = l => Array.isArray(l) && l.length === 2 ? l.map(e => oneLine(e, 40)) : ['', ''];
+		return { ...base, items, min, max, x: ends(p.x), y: ends(p.y) };
+	}
+	case 'pin': {
+		// The phones load the image, so it must be a public https address.
+		const image = typeof p.image === 'string' && p.image.length <= 500 && /^https:\/\/[^\s"'<>\\]+$/.test(p.image) ? p.image : null;
+		return image ? { ...base, image, alt: oneLine(p.alt, 200) } : null;
+	}
 	case 'scale': {
 		const statements = texts(p.statements, 1, MAX_STATEMENTS, 200);
 		const { min, max } = p;
@@ -204,10 +244,39 @@ function pollDefinition(p) {
 	case 'words': {
 		const entries = p.entries ?? 1;
 		if (!isInt(entries, 1, MAX_ENTRIES)) return null;
-		return { ...base, entries, moderated: p.moderated !== false };
+		return { ...base, entries, moderated: p.moderated !== false, filter: p.filter !== false };
 	}
 	}
 	return null;
+}
+
+// The word filter: a word cloud's words that are never shown without the
+// tablet's approval, even in a poll that otherwise shows every word at once.
+// A caught word is only held, not refused, so a false alarm costs a tap on the
+// tablet.  Every word of an entry is checked, as typed and with the common
+// symbol-for-letter swaps undone ("sh1t") and doubled letters single, and an
+// entry spelt out letter by letter ("f u c k") is also read run together.
+// EXACT matches whole words; PREFIX, any word starting so; WITHIN, any word
+// containing it.
+const BLOCKED = {
+	EXACT: new Set(['ass', 'arse', 'cock', 'cocks', 'dick', 'dicks', 'prick', 'pricks', 'tit', 'tits', 'titty', 'titties', 'boob', 'boobs',
+		'cum', 'jizz', 'anal', 'anus', 'dildo', 'fag', 'fags', 'homo', 'dyke', 'dykes', 'kike', 'kikes', 'chink', 'chinks', 'gook', 'gooks',
+		'paki', 'pakis', 'wog', 'wogs', 'spic', 'spics', 'coon', 'coons', 'tranny', 'trannies', 'bitch', 'bitches', 'slut', 'sluts',
+		'whore', 'whores', 'piss', 'pussy', 'pussies', 'porn', 'porno', 'retard', 'retards', 'retarded', 'spaz', 'spastic', 'raghead',
+		'towelhead', 'dickhead', 'dickheads', 'knob', 'knobhead', 'bellend', 'nonce', 'skank', 'hoe', 'hoes']),
+	PREFIX: ['cunt', 'bastard', 'bollock', 'twat', 'arsehole', 'asshole', 'motherf', 'cocksuck', 'blowjob', 'handjob', 'wanker'],
+	WITHIN: ['fuck', 'shit', 'nigger', 'nigga', 'faggot', 'wank']
+};
+const UNSWAP = { 0: 'o', 1: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't', 8: 'b', '@': 'a', $: 's', '!': 'i', '|': 'l', '+': 't' };
+function caught(text) {
+	const lower = text.normalize('NFKC').toLocaleLowerCase('en');
+	const words = new Set();
+	for (const form of [lower, lower.replace(/[0134578@$!|+]/g, c => UNSWAP[c])]) {
+		const parts = form.split(/[^\p{L}]+/u).filter(Boolean);
+		if (parts.length > 1 && parts.every(w => [...w].length === 1)) parts.push(parts.join(''));
+		parts.forEach(w => { words.add(w); words.add(w.replace(/(\p{L})\1+/gu, '$1')); });
+	}
+	return [...words].some(w => BLOCKED.EXACT.has(w) || BLOCKED.PREFIX.some(p => w.startsWith(p)) || BLOCKED.WITHIN.some(p => w.includes(p)));
 }
 
 // A word cloud's words are grouped case- and punctuation-blind.
@@ -244,6 +313,16 @@ function answerTo(def, value) {
 		}
 		return words;
 	}
+	case 'self-others':
+		return list(2) && isInt(value[0], 0, def.options.length - 1) && isInt(value[1], 0, 100) ? [...value] : undefined;
+	case 'points':
+		return list(def.options.length) && value.every(v => isInt(v, 0, def.total)) && value.reduce((a, b) => a + b, 0) === def.total
+			? [...value] : undefined;
+	case 'grid':
+		return list(def.items.length) && value.every(v => Array.isArray(v) && v.length === 2 && isInt(v[0], def.min, def.max) && isInt(v[1], def.min, def.max))
+			? value.map(v => [...v]) : undefined;
+	case 'pin':
+		return list(2) && isInt(value[0], 0, PIN_SCALE) && isInt(value[1], 0, PIN_SCALE) ? [...value] : undefined;
 	}
 	return undefined;
 }
@@ -251,19 +330,24 @@ function answerTo(def, value) {
 const aliasOf = (channel, voter) => sha256(ALIAS_SALT + ':' + channel + ':' + voter).slice(0, 12);
 
 // A word cloud's words, with how many phones gave each, and each one's status:
-// 'pending' (waiting for the tablet), 'shown' or 'hidden'.
+// 'pending' (waiting for the tablet), 'shown' or 'hidden'; and whether the
+// word filter caught it.
 function wordsOf(poll) {
 	const counts = new Map();
 	for (const list of poll.answers.values()) for (const w of list) counts.set(wordKey(w), (counts.get(wordKey(w)) || 0) + 1);
-	return [...counts].map(([key, n]) => ({ key, word: poll.words.get(key).word, n, status: poll.words.get(key).status }))
-		.sort((a, b) => b.n - a.n || a.key.localeCompare(b.key));
+	return [...counts].map(([key, n]) => {
+		const e = poll.words.get(key);
+		return e.caught ? { key, word: e.word, n, status: e.status, caught: true } : { key, word: e.word, n, status: e.status };
+	}).sort((a, b) => b.n - a.n || a.key.localeCompare(b.key));
 }
+
+const counted = def => def.kind === 'choice' || (def.kind === 'number' && def.max - def.min <= MAX_COUNTED_RANGE);
 
 // What the laptop is sent: see the comment above.
 function tallyOf(channel, poll) {
 	const def = poll.def;
 	const tally = { id: def.id, total: poll.answers.size };
-	if (def.kind === 'choice' || def.kind === 'number') {
+	if (counted(def)) {
 		const counts = new Array(def.kind === 'choice' ? def.options.length : def.max - def.min + 1).fill(0);
 		for (const a of poll.answers.values()) {
 			if (Array.isArray(a)) a.forEach(k => counts[k]++);
@@ -281,6 +365,26 @@ const wordsMessage = (channel, poll) => ({
 	id: poll.def.id, prompt: poll.def.prompt, moderated: poll.def.moderated,
 	open: polls.get(channel)?.current === poll.def.id, total: poll.answers.size, words: wordsOf(poll)
 });
+
+// What the tablet is sent of any poll: how many have answered, and for a
+// choice poll how many chose each option, for a number poll the median and
+// mean, so the lecturer can see how it is going without the screen.
+function countOf(channel, poll) {
+	const def = poll.def;
+	const m = { id: def.id, kind: def.kind, prompt: def.prompt, open: polls.get(channel)?.current === def.id, total: poll.answers.size };
+	if (def.kind === 'choice') {
+		m.options = def.options;
+		m.counts = def.options.map(() => 0);
+		for (const a of poll.answers.values()) (Array.isArray(a) ? a : [a]).forEach(k => m.counts[k]++);
+	}
+	if (def.kind === 'number' && poll.answers.size) {
+		const values = [...poll.answers.values()].sort((a, b) => a - b);
+		m.median = values[Math.ceil(values.length / 2) - 1];
+		m.mean = Math.round(10 * values.reduce((a, b) => a + b, 0) / values.length) / 10;
+		m.unit = def.unit;
+	}
+	return m;
+}
 
 function authenticated(data) {
 	return !!data && typeof data.secret === 'string' && typeof data.socketId === 'string'
@@ -300,6 +404,72 @@ function throttled(poll, name, send) {
 }
 const sendTally = (channel, poll) => throttled(poll, 'tally', () => io.to('results:' + channel).emit('poll-tally', tallyOf(channel, poll)));
 const sendWords = (channel, poll) => throttled(poll, 'words', () => io.to('q:' + channel).emit('poll-words', wordsMessage(channel, poll)));
+const sendCount = (channel, poll) => throttled(poll, 'count', () => io.to('q:' + channel).emit('poll-count', countOf(channel, poll)));
+
+/*
+ * The board: questions the tablet chooses to share with the room, which
+ * phones may then upvote (Slido's Q&A).  A question still reaches only the
+ * tablet; only one the lecturer shares ('board-share', with the questions key)
+ * is kept, in memory, without its sender's name, for BOARD_TTL_MS, until the
+ * tablet takes it down ('board-remove').  Phones vote with 'board-vote' (one
+ * vote per phone per question, which it can take back); the board, with each
+ * question's votes, goes to the phones, the tablet and the laptop ('board').
+ */
+const BOARD_TTL_MS = 3 * 3600 * 1000;
+const MAX_BOARD = 50;						// shared questions per channel
+const PER_SOCKET_VOTE_MS = 250;
+const VOTES_PER_ADDRESS_PER_MIN = 1000;
+const boards = new Map();	// channel id -> { items: Map(id -> { id, text, votes: Set(voter), at, expires }), timer, last }
+
+const boardMessage = channel => ({
+	items: [...(boards.get(channel)?.items.values() || [])]
+		.map(({ id, text, votes, at }) => ({ id, text, votes: votes.size, at }))
+		.sort((a, b) => b.votes - a.votes || a.at - b.at)
+});
+const sendBoard = channel => {
+	if (!boards.has(channel)) boards.set(channel, { items: new Map() });
+	throttled(boards.get(channel), 'board', () => io.to('audience:' + channel).to('q:' + channel).to('results:' + channel).emit('board', boardMessage(channel)));
+};
+
+/*
+ * Reactions and the pace signal, which the laptop switches on with
+ * questions-open's audience: { reactions: [...], pace: true }.  A phone may
+ * send one of the deck's reactions ('reaction') at any time; it goes to the
+ * laptop, which floats it up the screen, and to the tablet, and is kept
+ * nowhere.  A phone may also say it is lost ('pace', lost: true or false),
+ * privately: the tablet alone is told how many phones have said so in the
+ * last PACE_WINDOW_MS ('pace'), out of how many on the ask page.
+ */
+const MAX_REACTIONS = 8;
+const PER_SOCKET_REACTION_MS = 800;
+const REACTIONS_PER_CHANNEL_PER_MIN = 600;
+const REACTIONS_PER_ADDRESS_PER_MIN = 300;
+const PACE_WINDOW_MS = 2 * 60 * 1000;
+const pace = new Map();		// channel id -> { lost: Map(voter -> time), timer, last, sent }
+
+function audienceOptions(a) {
+	const reactions = a && Array.isArray(a.reactions)
+		? a.reactions.filter(r => typeof r === 'string' && r.length >= 1 && r.length <= 16 && !/[\s<>&"'\\]/.test(r)) : [];
+	return { reactions: [...new Set(reactions)].slice(0, MAX_REACTIONS), pace: !!a && a.pace === true };
+}
+const NO_AUDIENCE = { reactions: [], pace: false };
+
+function paceMessage(channel) {
+	const state = pace.get(channel);
+	const now = Date.now();
+	if (state) for (const [voter, at] of state.lost) if (now - at >= PACE_WINDOW_MS) state.lost.delete(voter);
+	const room = io.sockets.adapter.rooms.get('audience:' + channel);
+	return { lost: state ? state.lost.size : 0, audience: room ? room.size : 0, window: PACE_WINDOW_MS };
+}
+const sendPace = channel => {
+	if (!pace.has(channel)) pace.set(channel, { lost: new Map() });
+	const state = pace.get(channel);
+	throttled(state, 'pace', () => {
+		const m = paceMessage(channel);
+		state.sent = m.lost;
+		io.to('q:' + channel).emit('pace', m);
+	});
+};
 
 io.on('connection', socket => {
 	socket.on('multiplex-statechanged', data => {
@@ -316,14 +486,24 @@ io.on('connection', socket => {
 		if (typeof channel === 'string' && latest.has(channel)) socket.emit(channel, latest.get(channel));
 	});
 
-	socket.on('questions-open', data => {
-		if (!data || typeof data.secret !== 'string' || typeof data.socketId !== 'string') return;
-		if (sha256(data.secret) !== data.socketId) return;
-		if (!/^\d{4}$/.test(data.code) || !HEX64.test(data.keyHash)) return;
-		const room = 'q:' + data.socketId;
-		const previous = open.get(data.socketId);
+	// The laptop opens questions; with them, the audience's reactions and pace
+	// signal (data.audience; both off if absent).  It may pass an ack, which
+	// carries the board.  It also joins the channel's results room, for the
+	// board and reactions.
+	socket.on('questions-open', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		if (!data || typeof data.secret !== 'string' || typeof data.socketId !== 'string') return reply({ ok: false, reason: 'secret' });
+		if (sha256(data.secret) !== data.socketId) return reply({ ok: false, reason: 'secret' });
+		if (!/^\d{4}$/.test(data.code) || !HEX64.test(data.keyHash)) return reply({ ok: false, reason: 'invalid' });
+		const channel = data.socketId;
+		const room = 'q:' + channel;
+		const previous = open.get(channel);
 		if (previous && previous.keyHash !== data.keyHash) io.in(room).socketsLeave(room);	// key changed: re-authenticate
-		open.set(data.socketId, { code: data.code, keyHash: data.keyHash, expires: Date.now() + CODE_TTL_MS });
+		const audience = audienceOptions(data.audience);
+		open.set(channel, { code: data.code, keyHash: data.keyHash, expires: Date.now() + CODE_TTL_MS, audience });
+		if (JSON.stringify(audience) !== JSON.stringify(previous?.audience || NO_AUDIENCE)) io.to('audience:' + channel).emit('audience', audience);
+		socket.join('results:' + channel);
+		reply({ ok: true, board: boardMessage(channel) });
 	});
 
 	socket.on('questions-listen', (data, ack) => {
@@ -332,10 +512,14 @@ io.on('connection', socket => {
 		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
 		if (typeof data.key !== 'string' || sha256(data.key) !== entry.keyHash) return ack({ ok: false, reason: 'key' });
 		socket.join('q:' + data.channel);
-		ack({ ok: true, code: entry.code });	// so the presenter can read it out if the slide isn't showing
+		ack({ ok: true, code: entry.code, audience: entry.audience || NO_AUDIENCE });	// the code, so the presenter can read it out if the slide isn't showing
 		const state = polls.get(data.channel);
 		const cloud = state && state.words !== null ? state.byId.get(state.words) : null;
 		if (cloud) socket.emit('poll-words', wordsMessage(data.channel, cloud));
+		const latestPoll = state && state.last ? state.byId.get(state.last) : null;
+		if (latestPoll) socket.emit('poll-count', countOf(data.channel, latestPoll));
+		socket.emit('board', boardMessage(data.channel));
+		socket.emit('pace', paceMessage(data.channel));
 	});
 
 	let lastQuestion = 0;
@@ -382,10 +566,12 @@ io.on('connection', socket => {
 			state.current = def.id;
 			io.to('audience:' + channel).emit('poll', def);
 		}
+		state.last = def.id;
 		if (def.kind === 'words') {
 			state.words = def.id;
 			io.to('q:' + channel).emit('poll-words', wordsMessage(channel, poll));
 		}
+		io.to('q:' + channel).emit('poll-count', countOf(channel, poll));
 		reply({ ok: true, tally: tallyOf(channel, poll) });
 	});
 
@@ -397,6 +583,7 @@ io.on('connection', socket => {
 		state.current = null;
 		io.to('audience:' + data.socketId).emit('poll', null);
 		if (closed && closed.def.kind === 'words') io.to('q:' + data.socketId).emit('poll-words', wordsMessage(data.socketId, closed));
+		if (closed) io.to('q:' + data.socketId).emit('poll-count', countOf(data.socketId, closed));
 	});
 
 	// The laptop asks for a poll's tally: results on a later slide, say.  It
@@ -410,7 +597,7 @@ io.on('connection', socket => {
 	});
 
 	// A phone joins the audience with the day's code; the ack carries the poll
-	// open now, if any.
+	// open now, if any, the board, and the audience options (reactions, pace).
 	socket.on('audience-join', (data, ack) => {
 		if (typeof ack !== 'function') return;
 		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
@@ -419,7 +606,8 @@ io.on('connection', socket => {
 		socket.join('audience:' + data.channel);
 		const state = polls.get(data.channel);
 		const poll = state && state.current !== null ? state.byId.get(state.current) : null;
-		ack({ ok: true, poll: poll ? poll.def : null });
+		ack({ ok: true, poll: poll ? poll.def : null, board: boardMessage(data.channel), audience: entry.audience || NO_AUDIENCE });
+		if (entry.audience?.pace) sendPace(data.channel);		// the tablet's "out of how many"
 	});
 
 	let lastAnswer = 0;
@@ -443,14 +631,21 @@ io.on('connection', socket => {
 		if (!withinLimit('pc:' + data.channel, ANSWERS_PER_CHANNEL_PER_MIN)) return ack({ ok: false, reason: 'busy' });
 		lastAnswer = Date.now();
 		if (words) {
-			for (const w of value) if (!poll.words.has(wordKey(w))) poll.words.set(wordKey(w), { word: w, status: poll.def.moderated ? 'pending' : 'shown' });
+			for (const w of value) {
+				if (poll.words.has(wordKey(w))) continue;
+				const isCaught = poll.def.filter !== false && caught(w);
+				poll.words.set(wordKey(w), isCaught ? { word: w, status: 'pending', caught: true } : { word: w, status: poll.def.moderated ? 'pending' : 'shown' });
+			}
 			if (value.length) poll.answers.set(voter, value);
 			else poll.answers.delete(voter);
 			sendWords(data.channel, poll);
 		}
 		else poll.answers.set(voter, value);
 		sendTally(data.channel, poll);
-		ack({ ok: true });
+		sendCount(data.channel, poll);
+		// For a word cloud, how many of this phone's words are not on the screen
+		// (waiting for the tablet, or hidden by it).
+		ack(words ? { ok: true, held: value.filter(w => poll.words.get(wordKey(w)).status !== 'shown').length } : { ok: true });
 	});
 
 	// The tablet (with the questions key) shows or hides a word cloud's words:
@@ -471,7 +666,105 @@ io.on('connection', socket => {
 		sendTally(data.channel, poll);
 		reply({ ok: true });
 	});
+
+	// The tablet's side of the board: share a question, or take one down.
+	const tablet = data => {
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return 'closed';
+		if (typeof data.key !== 'string' || sha256(data.key) !== entry.keyHash) return 'key';
+		return null;
+	};
+	socket.on('board-share', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const refused = tablet(data);
+		if (refused) return reply({ ok: false, reason: refused });
+		const text = clean(data.text);
+		if (!text) return reply({ ok: false, reason: 'invalid' });
+		if (!boards.has(data.channel)) boards.set(data.channel, { items: new Map() });
+		const items = boards.get(data.channel).items;
+		const same = [...items.values()].find(i => i.text === text);
+		if (same) return reply({ ok: true, id: same.id });		// shared already
+		if (items.size >= MAX_BOARD) return reply({ ok: false, reason: 'busy' });
+		const id = crypto.randomUUID();
+		items.set(id, { id, text, votes: new Set(), at: Date.now(), expires: Date.now() + BOARD_TTL_MS });
+		sendBoard(data.channel);
+		reply({ ok: true, id });
+	});
+	socket.on('board-remove', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const refused = tablet(data);
+		if (refused) return reply({ ok: false, reason: refused });
+		const board = boards.get(data.channel);
+		if (data.all === true && board) board.items.clear();
+		else if (!board || typeof data.id !== 'string' || !board.items.delete(data.id)) return reply({ ok: false, reason: 'unknown' });
+		sendBoard(data.channel);
+		reply({ ok: true });
+	});
+
+	// A phone votes for a question on the board (up: true), or takes its vote
+	// back (up: false).
+	let lastVote = 0;
+	socket.on('board-vote', (data, ack) => {
+		if (typeof ack !== 'function') return;
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
+		if (data.code !== entry.code) return ack({ ok: false, reason: 'code' });
+		const item = typeof data.id === 'string' && boards.get(data.channel)?.items.get(data.id);
+		if (!item) return ack({ ok: false, reason: 'unknown' });
+		if (typeof data.voter !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(data.voter)) return ack({ ok: false, reason: 'invalid' });
+		if (Date.now() - lastVote < PER_SOCKET_VOTE_MS) return ack({ ok: false, reason: 'slow' });
+		if (!withinLimit('va:' + addressOf(socket), VOTES_PER_ADDRESS_PER_MIN)) return ack({ ok: false, reason: 'busy' });
+		lastVote = Date.now();
+		if (data.up === true) item.votes.add(data.voter); else item.votes.delete(data.voter);
+		sendBoard(data.channel);
+		ack({ ok: true, votes: item.votes.size });
+	});
+
+	// A reaction, from those the deck offers; forwarded and forgotten.
+	let lastReaction = 0;
+	socket.on('reaction', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return reply({ ok: false, reason: 'closed' });
+		if (data.code !== entry.code) return reply({ ok: false, reason: 'code' });
+		if (!entry.audience || !entry.audience.reactions.includes(data.emoji)) return reply({ ok: false, reason: 'invalid' });
+		if (Date.now() - lastReaction < PER_SOCKET_REACTION_MS) return reply({ ok: false, reason: 'slow' });
+		if (!withinLimit('ra:' + addressOf(socket), REACTIONS_PER_ADDRESS_PER_MIN)) return reply({ ok: false, reason: 'busy' });
+		if (!withinLimit('rc:' + data.channel, REACTIONS_PER_CHANNEL_PER_MIN)) return reply({ ok: false, reason: 'busy' });
+		lastReaction = Date.now();
+		io.to('results:' + data.channel).to('q:' + data.channel).emit('reaction', { emoji: data.emoji });
+		reply({ ok: true });
+	});
+
+	// "I'm lost" (lost: true) or "I'm fine again" (lost: false), for the tablet
+	// alone; it lapses after PACE_WINDOW_MS.
+	let lastPace = 0;
+	socket.on('pace', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
+		if (!entry || entry.expires < Date.now()) return reply({ ok: false, reason: 'closed' });
+		if (data.code !== entry.code) return reply({ ok: false, reason: 'code' });
+		if (!entry.audience || !entry.audience.pace) return reply({ ok: false, reason: 'closed' });
+		if (typeof data.voter !== 'string' || !/^[A-Za-z0-9-]{8,64}$/.test(data.voter)) return reply({ ok: false, reason: 'invalid' });
+		if (Date.now() - lastPace < 1000) return reply({ ok: false, reason: 'slow' });
+		if (!withinLimit('pp:' + addressOf(socket), ANSWERS_PER_ADDRESS_PER_MIN)) return reply({ ok: false, reason: 'busy' });
+		lastPace = Date.now();
+		if (!pace.has(data.channel)) pace.set(data.channel, { lost: new Map() });
+		const lost = pace.get(data.channel).lost;
+		if (data.lost === true) lost.set('v:' + data.voter, Date.now());
+		else lost.delete('v:' + data.voter);
+		sendPace(data.channel);
+		reply({ ok: true, window: PACE_WINDOW_MS });
+	});
 });
+
+// The pace count falls as signals lapse: tell the tablet when it does.
+setInterval(() => {
+	for (const [channel, state] of pace) {
+		if (paceMessage(channel).lost !== state.sent) sendPace(channel);
+		if (!state.lost.size && !open.has(channel)) pace.delete(channel);
+	}
+}, 10 * 1000).unref();
 
 // Forget lapsed channels, old timestamps and lapsed polls.
 setInterval(() => {
@@ -485,6 +778,12 @@ setInterval(() => {
 			if (state.current === id) { state.current = null; io.to('audience:' + channel).emit('poll', null); }
 		}
 		if (!state.byId.size) polls.delete(channel);
+	}
+	for (const [channel, board] of boards) {
+		let changed = false;
+		for (const [id, item] of board.items) if (item.expires < now) { board.items.delete(id); changed = true; }
+		if (changed) sendBoard(channel);
+		if (!board.items.size && !open.has(channel)) boards.delete(channel);
 	}
 }, 10 * 60 * 1000).unref();
 

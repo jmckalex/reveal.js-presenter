@@ -29,7 +29,7 @@ Audience questions add three events, all to `server/relay.js` only:
 
 | Event | Sent by | Carries | Relay checks |
 |---|---|---|---|
-| `'questions-open'` | the laptop, every minute | `{ socketId, secret, code, keyHash }` | `sha256(secret) === socketId` |
+| `'questions-open'` | the laptop, every minute, ack optional | `{ socketId, secret, code, keyHash, audience? }`; `audience` is `{ reactions: [up to 8 emoji], pace: true }` | `sha256(secret) === socketId`; the ack carries the board |
 | `'questions-listen'` | the tablet, with an ack | `{ channel, key }` | `sha256(key) === keyHash`; the ack carries the code |
 | `'question'` | anyone, with an ack | `{ channel, code, text, name? }` | the code, the lengths (text 280, name 40), the rate limits, and that a tablet is listening |
 
@@ -47,11 +47,15 @@ answer (`value`) a phone sends:
 | `kind` | Definition adds | A phone's answer |
 |---|---|---|
 | `'choice'` | `options` (2–12 labels); `picks` (how many may be chosen; omitted for 1) | an option's index; with `picks`, a list of 1–`picks` distinct indices |
-| `'number'` | `min`, `max` (integers, `max - min` ≤ 1000), `unit` | an integer from `min` to `max` |
+| `'number'` | `min`, `max` (integers, `max - min` ≤ 1,000,000), `unit` | an integer from `min` to `max` |
 | `'scale'` | `statements` (1–12), `min`, `max` (`max - min` ≤ 10), `labels` (the two ends) | a list: an integer from `min` to `max` per statement |
 | `'premises'` | `statements` (2–12), `conclusion` (its index, default the last), `labels` (default `['Accept', 'Reject']`) | a list: 1 (accept) or 0 (reject) per statement |
 | `'ranking'` | `options` (2–10) | a list of every option's index, first choice first |
-| `'words'` | `entries` (1–5 per phone), `moderated` (default true) | a list of up to `entries` texts of ≤ 30 characters; `[]` withdraws |
+| `'words'` | `entries` (1–5 per phone), `moderated` (default true), `filter` (default true) | a list of up to `entries` texts of ≤ 30 characters; `[]` withdraws |
+| `'self-others'` | `options` (2–6, default `['Yes', 'No']`), `target` (default 0), `others` (the second question) | `[k, p]`: the phone's own option, and its guess, 0–100, at the percentage of the room choosing `options[target]` |
+| `'points'` | `options` (2–10), `total` (2–1000, default 100), `unit` | a list: the points given each option, adding up to `total` |
+| `'grid'` | `items` (1–8), `min`, `max` (default 0 and 10, `max - min` ≤ 100), `x` and `y` (each axis's two ends) | a list: `[x, y]` per item, each from `min` to `max` |
+| `'pin'` | `image` (an `https:` URL, ≤ 500 characters), `alt` | `[x, y]`, each 0–1000: thousandths of the image's width and height |
 
 | Event | Sent by | Carries | Relay checks |
 |---|---|---|---|
@@ -61,6 +65,10 @@ answer (`value`) a phone sends:
 | `'audience-join'` | a phone, with an ack | `{ channel, code }` | the day's code (questions must be open); the ack carries the open poll or `null` |
 | `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value against the kind, the rate limits |
 | `'poll-moderate'` | the tablet, with an ack | `{ channel, key, id, word, status }` or `{ channel, key, id, all: true, status }` | the questions key; `status` is `'shown'` or `'hidden'`; `all` sets every pending word |
+| `'board-share'`, `'board-remove'` | the tablet, with an ack | `{ channel, key, text }`; `{ channel, key, id }` or `{ channel, key, all: true }` | the questions key; the text as for a question |
+| `'board-vote'` | a phone, with an ack | `{ channel, code, id, voter, up }` | the code; one vote per `voter` per question; `up: false` takes it back |
+| `'reaction'` | a phone, ack optional | `{ channel, code, emoji }` | the code; `emoji` one of the deck's reactions; one per 0.8 s per connection |
+| `'pace'` | a phone, ack optional | `{ channel, code, voter, lost }` | the code; that the deck has the pace signal on |
 
 Phones in the audience get `'poll'` with the poll (no tally) when one opens
 and `null` when it closes. The laptop gets `'poll-tally'` as answers arrive,
@@ -75,6 +83,32 @@ traceable to the phone. The tablet (in the questions room) gets
 `'poll-words'` `{ id, prompt, moderated, open, total, words }`, each word
 `{ key, word, n, status }` with `status` `'pending'`, `'shown'` or `'hidden'`,
 whenever a word cloud opens, closes or changes, and on `'questions-listen'`.
+Each word may also carry `caught: true`: the relay's word filter (on unless
+the poll has `filter: false`) found a swear word or slur in it, and holds it
+for the tablet even in an unmoderated cloud. A held word is never refused, so
+a false alarm costs one tap. The phone's ack for a word cloud carries `held`,
+how many of its words are not on the screen.
+
+The tablet also gets `'poll-count'` for the latest poll as it opens, closes
+and gains answers: `{ id, kind, prompt, open, total }`, plus `options` and
+`counts` for a choice poll, or `median`, `mean` and `unit` for a number poll.
+For a number poll wider than 1000 values the laptop's tally has no `counts`
+(the `answers` carry everything).
+
+**The board** (upvoted questions): a question still reaches only the tablet;
+the tablet may *share* one (`'board-share'`), which the relay then keeps,
+without the sender's name, for three hours or until the tablet takes it down.
+Phones, the tablet and the laptop get `'board'` `{ items }`, each
+`{ id, text, votes, at }`, most votes first, whenever it changes; phones and
+the laptop also in `'audience-join'`'s and `'questions-open'`'s acks.
+
+**Reactions and the pace signal** are switched on by the laptop's
+`questions-open` (`audience`), and phones learn them in `'audience-join'`'s ack
+and, when they change, from `'audience'`. A reaction goes to the laptop and the
+tablet as `'reaction'` `{ emoji }` and is kept nowhere. The pace signal goes to
+the tablet alone, as `'pace'` `{ lost, audience, window }`: how many phones
+said they were lost in the last `window` ms (two minutes), out of how many are
+on the ask page.
 
 ## Integration procedure
 
@@ -231,6 +265,10 @@ For audience questions:
     shown. (The user chose this so that a laptop reload loses nothing,
     results can appear on a later slide, and free text is never projected
     unseen.)
+12b. **The board keeps only what the tablet shares.** Questions still go
+    only to the tablet; the lecturer chooses which to share for upvoting, and
+    the relay keeps those, without names, for three hours. Never put an
+    incoming question on the board automatically.
 13. **Tie the code and the key to the presenter secret.** Only a client that
     proves the secret may set a channel's code and accepted key hash.
     Otherwise anyone with a channel of their own could open questions on

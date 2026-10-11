@@ -455,6 +455,7 @@ function check(ok, name, detail) {
 		check(P.lateJoin.ok && P.lateJoin.poll && P.lateJoin.poll.id === 'colour', 'a phone joining late is sent the open poll', J(P.lateJoin));
 		check(P.phoneTallies === 0, 'phones never receive the tally', P.phoneTallies);
 
+
 		if (process.env.SCREENSHOTS) {
 			const other = await browser.newPage();
 			await other.setViewport({ width: 390, height: 760 });
@@ -473,6 +474,107 @@ function check(ok, name, detail) {
 		const r3 = await ask(student, code, 'And a second question straight away');
 		check(r3.includes('wait a few seconds'), 'a second question within 10 s is held back', r3);
 
+		// The other kinds, and a word cloud's moderation by the tablet.
+		console.log('\n--- poll kinds');
+		const K = await student.evaluate(async (secret, channel, code, key) => {
+			const sleep = ms => new Promise(r => setTimeout(r, ms));
+			const connect = () => new Promise(r => { const s = io(window.PresenterConfig.relay, { forceNew: true }); s.on('connect', () => r(s)); });
+			const call = (s, event, data) => new Promise(r => s.emit(event, data, r));
+			const out = {};
+			const laptop = await connect();
+			let tally = null;
+			laptop.on('poll-tally', t => { tally = t; });
+			const open = poll => call(laptop, 'poll-open', { socketId: channel, secret, poll });
+			const phones = await Promise.all([connect(), connect(), connect()]);
+			const ids = ['voter-kind0001', 'voter-kind0002', 'voter-kind0003'];
+			let phoneWords = 0, phoneTallies = 0;
+			phones.forEach(p => { p.on('poll-words', () => phoneWords++); p.on('poll-tally', () => phoneTallies++); });
+			for (const p of phones) await call(p, 'audience-join', { channel, code });
+			const answer = (k, id, value) => call(phones[k], 'poll-answer', { channel, code, id, value, voter: ids[k] });
+			const round = async (id, values) => { const r = []; for (let k = 0; k < values.length; k++) r.push(await answer(k, id, values[k])); await sleep(1100); return r; };
+			const latest = async () => { await sleep(400); return tally; };
+
+			out.bogus = await open({ id: 'bogus', kind: 'bogus' });
+			out.badScale = await open({ id: 'bad', kind: 'scale', statements: ['S'], min: 0, max: 20 });
+
+			out.multiOpen = await open({ id: 'multi', kind: 'choice', options: ['A', 'B', 'C', 'D'], picks: 2 });
+			out.multi = await round('multi', [[2, 0], [2], [1, 3]]);
+			out.multiBad = [await answer(0, 'multi', [0, 1, 2]), await answer(0, 'multi', [1, 1]), await answer(0, 'multi', 2)];
+			out.multiTally = await latest();
+
+			await open({ id: 'scale', kind: 'scale', statements: ['S1', 'S2'], min: 1, max: 5, labels: ['Disagree', 'Agree'] });
+			out.scale = await round('scale', [[1, 5], [3, 4]]);
+			out.scaleBad = [await answer(2, 'scale', [6, 1]), await answer(2, 'scale', [1])];
+			out.scaleTally = await latest();
+
+			out.premisesOpen = await open({ id: 'premises', kind: 'premises', statements: ['p', 'q', 'p and q'] });
+			out.premises = await round('premises', [[1, 1, 1], [1, 0, 0], [0, 1, 0]]);
+			out.premisesBad = await answer(0, 'premises', [1, 2, 1]);
+			out.premisesTally = await latest();
+
+			await open({ id: 'rank', kind: 'ranking', options: ['A', 'B', 'C'] });
+			out.rank = await round('rank', [[2, 0, 1], [0, 1, 2], [1, 2, 0]]);
+			out.rankBad = [await answer(0, 'rank', [0, 0, 1]), await answer(0, 'rank', [0, 1])];
+			out.rankTally = await latest();
+
+			// A word cloud, held for the tablet.
+			const tablet = await connect();
+			const seen = [];
+			tablet.on('poll-words', m => seen.push(m));
+			out.listen = await call(tablet, 'questions-listen', { channel, key });
+			await open({ id: 'cloud', kind: 'words', entries: 2, prompt: 'One word for it' });
+			await sleep(300);
+			out.cloudOpened = seen[seen.length - 1];
+			out.cloud = await round('cloud', [['Truth', 'trust'], ['truth!'], ['Lies']]);
+			out.cloudBad = [await answer(0, 'cloud', ['a', 'b', 'c']), await answer(0, 'cloud', ['x'.repeat(31)]), await answer(0, 'cloud', [7])];
+			await sleep(400);
+			out.pending = seen[seen.length - 1];
+			out.beforeTally = await latest();
+			const moderate = data => call(tablet, 'poll-moderate', { channel, key, id: 'cloud', ...data });
+			out.wrongKey = await call(tablet, 'poll-moderate', { channel, key: 'NOT-THE-KEY', id: 'cloud', word: 'truth', status: 'shown' });
+			out.showOne = await moderate({ word: 'truth', status: 'shown' });
+			out.afterOne = await latest();
+			out.hideOne = await moderate({ word: 'lies', status: 'hidden' });
+			out.showAll = await moderate({ all: true, status: 'shown' });
+			out.afterAll = await latest();
+			out.withdraw = await answer(2, 'cloud', []);
+			out.afterWithdraw = await latest();
+			const rejoined = await connect();
+			const again = [];
+			rejoined.on('poll-words', m => again.push(m));
+			await call(rejoined, 'questions-listen', { channel, key });
+			await sleep(300);
+			out.rejoined = again[0];
+
+			await open({ id: 'free', kind: 'words', moderated: false });
+			await round('free', [['Open']]);
+			out.free = await latest();
+			out.phoneWords = phoneWords;
+			out.phoneTallies = phoneTallies;
+			laptop.emit('poll-close', { socketId: channel, secret });
+			[laptop, tablet, rejoined, ...phones].forEach(s => s.close());
+			return out;
+		}, secret, channel, code, questionsKey);
+		const aliasesOf = t => t ? t.answers.map(a => a[0]) : [];
+		check(K.bogus.reason === 'invalid' && K.badScale.reason === 'invalid', 'an unknown kind, or an impossible definition, is refused', J([K.bogus, K.badScale]));
+		check(K.multiOpen.ok && K.multi.every(a => a.ok) && K.multiBad.every(a => a.reason === 'invalid'), 'several picks: up to the limit, no repeats, as a list', J([K.multi, K.multiBad]));
+		check(K.multiTally && J(K.multiTally.counts) === '[1,1,2,1]' && K.multiTally.total === 3 && J(K.multiTally.answers.map(a => a[1])) === '[[0,2],[2],[1,3]]', 'several picks: counts per option, and each answer sorted', J(K.multiTally));
+		check(K.scale.every(a => a.ok) && K.scaleBad.every(a => a.reason === 'invalid') && J(K.scaleTally.answers.map(a => a[1])) === '[[1,5],[3,4]]' && !('counts' in K.scaleTally), 'a scale: one rating per statement, in range', J(K.scaleTally));
+		check(K.premisesOpen.ok && K.premises.every(a => a.ok) && K.premisesBad.reason === 'invalid' && K.premisesTally.answers.length === 3, 'premises: accept or reject each statement', J(K.premisesTally));
+		check(K.rank.every(a => a.ok) && K.rankBad.every(a => a.reason === 'invalid') && J(K.rankTally.answers.map(a => a[1])) === '[[2,0,1],[0,1,2],[1,2,0]]', 'a ranking: every option once', J(K.rankTally));
+		const a1 = aliasesOf(K.multiTally), a2 = aliasesOf(K.rankTally);
+		check(a1.length === 3 && new Set(a1).size === 3 && J(a1) === J(a2) && a1.every(a => /^[0-9a-f]{12}$/.test(a) && !a.includes('kind')), 'each phone has the same alias in every poll, and not its own id', J([a1, a2]));
+		check(K.listen.ok && K.cloudOpened && K.cloudOpened.id === 'cloud' && K.cloudOpened.open && K.cloudOpened.moderated && K.cloudOpened.prompt === 'One word for it', 'opening a word cloud tells the tablet', J(K.cloudOpened));
+		check(K.cloud.every(a => a.ok) && K.cloudBad.every(a => a.reason === 'invalid'), 'words: up to the limit, 30 characters each, text only', J([K.cloud, K.cloudBad]));
+		check(K.pending && J(K.pending.words.map(w => [w.key, w.n, w.status])) === '[["truth",2,"pending"],["lies",1,"pending"],["trust",1,"pending"]]', 'the tablet gets every word, grouped, as pending', J(K.pending && K.pending.words));
+		check(K.beforeTally && J(K.beforeTally.words) === '[]' && !('answers' in K.beforeTally) && K.beforeTally.total === 3, 'the laptop gets no words until they are shown, and never who gave them', J(K.beforeTally));
+		check(K.wrongKey.reason === 'key' && K.showOne.ok && J(K.afterOne.words) === '[{"word":"Truth","n":2}]', 'only the key can show a word; a shown word reaches the laptop', J([K.wrongKey, K.afterOne]));
+		check(K.hideOne.ok && K.showAll.ok && J(K.afterAll.words) === '[{"word":"Truth","n":2},{"word":"trust","n":1}]', '“show all” shows the pending words, not the hidden ones', J(K.afterAll));
+		check(K.withdraw.ok && K.afterWithdraw.total === 2, 'an empty list withdraws a phone’s words', J(K.afterWithdraw));
+		check(K.rejoined && K.rejoined.id === 'cloud' && K.rejoined.words.length === 2, 'a tablet that rejoins is sent the word cloud (as given now: withdrawn words go)', J(K.rejoined));
+		check(K.free && J(K.free.words) === '[{"word":"Open","n":1}]', 'an unmoderated word cloud shows every word at once', J(K.free));
+		check(K.phoneWords === 0 && K.phoneTallies === 0, 'phones never receive words or tallies', J([K.phoneWords, K.phoneTallies]));
+
 		const closed = await student.evaluate(() => new Promise(resolve => {
 			const s = io(window.PresenterConfig.relay, { forceNew: true });
 			s.emit('question', { channel: '0'.repeat(64), code: '1234', text: 'Hello?' }, resolve);
@@ -485,7 +587,7 @@ function check(ok, name, detail) {
 		const r4 = await ask(late, code, 'Is anyone there?');
 		check(r4.includes('wasn’t delivered'), 'with the tablet gone, the student is told it was not delivered', r4);
 
-		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there') && !relayLog.includes('Lovelace') && !relayLog.includes('voter-'), 'the relay never logs question text, names or poll answers');
+		check(!relayLog.includes('Postman prefer') && !relayLog.includes('anyone there') && !relayLog.includes('Lovelace') && !relayLog.includes('voter-') && !relayLog.includes('Truth'), 'the relay never logs question text, names or poll answers');
 		check(ipad.errors.length === 0, 'no errors on the tablet page', ipad.errors.join('; '));
 	}
 

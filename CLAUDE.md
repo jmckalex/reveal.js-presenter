@@ -39,10 +39,19 @@ so show it as what the sender typed, never as an identity).
 The ack's `reason` on refusal is one of `closed`, `code`, `invalid`, `slow`,
 `busy`, `offline` or `key`.
 
-Polls add five more, also `server/relay.js` only. A poll is
-`{ id, kind: 'choice', prompt, instructions, options: [2–12 labels] }` or
-`{ id, kind: 'number', prompt, instructions, min, max, unit }` (integers, `max - min` ≤ 1000).
-`instructions` is optional: one line telling the audience what to do, `''` if none:
+Polls add six more, also `server/relay.js` only. Every poll has
+`{ id, kind, prompt, instructions }` (`instructions` optional: one line telling
+the audience what to do, `''` if none), plus, by kind, what it takes and the
+answer (`value`) a phone sends:
+
+| `kind` | Definition adds | A phone's answer |
+|---|---|---|
+| `'choice'` | `options` (2–12 labels); `picks` (how many may be chosen; omitted for 1) | an option's index; with `picks`, a list of 1–`picks` distinct indices |
+| `'number'` | `min`, `max` (integers, `max - min` ≤ 1000), `unit` | an integer from `min` to `max` |
+| `'scale'` | `statements` (1–12), `min`, `max` (`max - min` ≤ 10), `labels` (the two ends) | a list: an integer from `min` to `max` per statement |
+| `'premises'` | `statements` (2–12), `conclusion` (its index, default the last), `labels` (default `['Accept', 'Reject']`) | a list: 1 (accept) or 0 (reject) per statement |
+| `'ranking'` | `options` (2–10) | a list of every option's index, first choice first |
+| `'words'` | `entries` (1–5 per phone), `moderated` (default true) | a list of up to `entries` texts of ≤ 30 characters; `[]` withdraws |
 
 | Event | Sent by | Carries | Relay checks |
 |---|---|---|---|
@@ -50,12 +59,22 @@ Polls add five more, also `server/relay.js` only. A poll is
 | `'poll-close'` | the laptop | `{ socketId, secret }` | the secret |
 | `'poll-results'` | the laptop, with an ack | `{ socketId, secret, id }` | the secret; the ack carries that poll's tally |
 | `'audience-join'` | a phone, with an ack | `{ channel, code }` | the day's code (questions must be open); the ack carries the open poll or `null` |
-| `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value (an option index or a number in range), the rate limits |
+| `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value against the kind, the rate limits |
+| `'poll-moderate'` | the tablet, with an ack | `{ channel, key, id, word, status }` or `{ channel, key, id, all: true, status }` | the questions key; `status` is `'shown'` or `'hidden'`; `all` sets every pending word |
 
 Phones in the audience get `'poll'` with the poll (no tally) when one opens
-and `null` when it closes. The laptop gets `'poll-tally'`
-`{ id, counts, total }` as answers arrive, at most every 300 ms. `voter` is a
-random id the phone keeps, so one phone counts once and may change its answer.
+and `null` when it closes. The laptop gets `'poll-tally'` as answers arrive,
+at most every 300 ms: `{ id, total }`, plus `counts` (per option, or per value
+from `min`) for choice and number polls, plus `answers`, a list of
+`[alias, answer]`, for every kind but words, or `words`, a list of
+`{ word, n }` of the shown words only, for words. `voter` is a random id the
+phone keeps, so one phone counts once and may change its answer; the alias is
+a hash of it with the channel and a salt made fresh each run, the same for a
+phone across a channel's polls (so before-and-after can be compared) but not
+traceable to the phone. The tablet (in the questions room) gets
+`'poll-words'` `{ id, prompt, moderated, open, total, words }`, each word
+`{ key, word, n, status }` with `status` `'pending'`, `'shown'` or `'hidden'`,
+whenever a word cloud opens, closes or changes, and on `'questions-listen'`.
 
 ## Integration procedure
 
@@ -204,11 +223,14 @@ For audience questions:
     tablet listening, the question is *refused*, not queued, and the student is
     told. Don't add a buffer "for reconnects": that is storage, and the user
     asked for none.
-12a. **Polls keep a tally, and only that.** Counts, plus each phone's current
-    answer under its random id, in memory, forgotten three hours after the
-    poll was last opened; never written or logged, and sent only to
-    connections that prove the secret. (The user chose this so that a laptop
-    reload loses nothing and results can appear on a later slide.)
+12a. **Polls keep answers, and only those.** Each phone's current answer
+    under its random id, in memory, forgotten three hours after the poll was
+    last opened; never written or logged. Answers go to the laptop (proving
+    the secret) under aliases, never the phones' ids; a word cloud's words go
+    first to the tablet (proving the key) and reach the laptop only once
+    shown. (The user chose this so that a laptop reload loses nothing,
+    results can appear on a later slide, and free text is never projected
+    unseen.)
 13. **Tie the code and the key to the presenter secret.** Only a client that
     proves the secret may set a channel's code and accepted key hash.
     Otherwise anyone with a channel of their own could open questions on

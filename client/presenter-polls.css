@@ -1,0 +1,688 @@
+/*
+ * reveal.js-presenter — the laptop's poll charts, the answer pill, the board
+ * of shared questions and floating reactions (see presenter-polls.js).
+ *
+ * Loaded by presenter-master.js only with ?master, so every other copy of a
+ * deck is as written: there a .poll-results is an empty box that takes no
+ * room, and a .poll is always empty.
+ *
+ * The colours follow the reveal.js theme (its link, text and background
+ * colours).  To restyle, set these on .reveal in the deck's own CSS:
+ *   --poll-accent      bars, borders and the scale's shades
+ *   --poll-text        text on charts and on the pill
+ *   --poll-card        an overlay's card, and the pill
+ *   --poll-highlight   the right answer, a game's winner, marks on a chart
+ *   --poll-colour-1 … --poll-colour-8   the palette: word clouds, flows, grids
+ */
+.reveal {
+	--poll-accent: var(--r-link-color, #2a76dd);
+	--poll-text: var(--r-main-color, #222);
+	--poll-card: var(--r-background-color, #fff);
+	--poll-highlight: #c0392b;
+	--poll-muted: color-mix(in srgb, var(--poll-text) 68%, transparent);
+	--poll-faint: color-mix(in srgb, var(--poll-accent) 10%, transparent);
+	--poll-colour-1: var(--poll-accent);
+	--poll-colour-2: #c0392b;
+	--poll-colour-3: #2e8b57;
+	--poll-colour-4: #d97b16;
+	--poll-colour-5: #8e44ad;
+	--poll-colour-6: #16878c;
+	--poll-colour-7: #9c6b3f;
+	--poll-colour-8: #c2185b;
+}
+
+/* While a poll is open, the pill at the foot of the screen (showPollStates()). */
+.reveal .poll-pill {
+	position: absolute;
+	left: 50%;
+	bottom: calc(10px * var(--slide-scale, 1));
+	transform: translateX(-50%);
+	z-index: 30;
+	display: flex;
+	align-items: center;
+	gap: 0.4em;
+	padding: 0.25em 0.9em;
+	font-family: var(--r-main-font, sans-serif);
+	font-size: calc(17px * var(--slide-scale, 1));
+	white-space: nowrap;
+	color: var(--poll-text);
+	background: color-mix(in srgb, var(--poll-card) 94%, transparent);
+	border: 1px solid var(--poll-accent);
+	border-radius: 999px;
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+	transition: opacity 0.2s ease;
+}
+.reveal .poll-pill[hidden] {
+	display: flex;
+	opacity: 0;
+	pointer-events: none;
+}
+.reveal .poll-pill .poll-pill-icon {
+	width: 0.7em;
+	height: 1.05em;
+	flex: none;
+}
+/* data-pill-position, or PresenterConfig.pollPillPosition: clear of
+   reveal.js's arrows at the bottom right. */
+.reveal .poll-pill[data-position="bottom-left"] {
+	left: calc(14px * var(--slide-scale, 1));
+	transform: none;
+}
+.reveal .poll-pill[data-position="bottom-right"] {
+	left: auto;
+	right: calc(130px * var(--slide-scale, 1));
+	transform: none;
+}
+.reveal .poll-pill[data-position^="top"] {
+	bottom: auto;
+	top: calc(12px * var(--slide-scale, 1));
+}
+.reveal .poll-pill[data-position="top-left"] {
+	left: calc(14px * var(--slide-scale, 1));
+	transform: none;
+}
+.reveal .poll-pill[data-position="top-right"] {
+	left: auto;
+	right: calc(14px * var(--slide-scale, 1));
+	transform: none;
+}
+
+/* A chart: a column of the chart itself and a line or two of summary. */
+.reveal .poll-results {
+	display: flex;
+	flex-direction: column;
+	height: 280px;		/* override on the element for a taller chart */
+	font-size: 0.5em;
+	margin: 0.4em 0;
+	color: var(--poll-text);
+	text-align: left;
+}
+.reveal .poll-results .chart {
+	flex: 1;
+	min-height: 0;
+}
+.reveal .poll-results .bar {
+	background: var(--poll-accent);
+	border-radius: 2px;
+}
+.reveal .poll-results .count {
+	font-variant-numeric: tabular-nums;
+	color: var(--poll-muted);
+}
+.reveal .poll-results .summary {
+	text-align: center;
+	color: var(--poll-muted);
+	margin-top: 0.4em;
+}
+/* Choice: a row per option. */
+.reveal .poll-results.choice .chart {
+	display: grid;
+	grid-template-columns: max-content 1fr max-content;
+	align-content: center;
+	align-items: center;
+	gap: 0.4em 0.6em;
+}
+.reveal .poll-results.choice .label {
+	text-align: right;
+}
+.reveal .poll-results.choice .bar {
+	height: 1.3em;
+	width: calc(var(--share) * 100%);
+	min-width: 2px;
+	transition: width 400ms ease;
+}
+/* Number: a column per value, or per range of values.  A grid, with the
+   labels in a row of their own, so that the bars share one axis even when
+   some labels wrap ("10" over "hrs"). */
+.reveal .poll-results.number .chart {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+	grid-template-rows: minmax(0, 1fr) auto;
+	column-gap: 0.25em;
+}
+.reveal .poll-results.number .col {
+	position: relative;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	align-items: center;
+}
+.reveal .poll-results.number .bar {
+	width: 80%;
+	height: calc(var(--share) * (100% - 1.4em));
+	transition: height 400ms ease;
+}
+.reveal .poll-results.number .label {
+	text-align: center;
+	border-top: 1px solid var(--poll-accent);
+	padding-top: 0.15em;
+	line-height: 1.2;
+}
+.reveal .poll-results.number .label span {
+	white-space: nowrap;		/* the number and the unit each stay whole; the unit may wrap below */
+}
+.reveal .poll-results.bare .label .word {
+	display: none;				/* a unit too wide for its column: see fitLabels() */
+}
+.reveal .poll-results.stacked .label .word {
+	display: block;				/* some units wrapped: all go below their numbers */
+}
+/* Scale: per statement, a bar divided by rating, and its mean; a key. */
+.reveal .poll-results.scale .chart {
+	display: grid;
+	grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) max-content;
+	gap: 0.55em 0.8em;
+	align-items: center;
+	align-content: center;
+}
+.reveal .poll-results.scale .statement,
+.reveal .poll-results.premises .statement {
+	line-height: 1.2;
+}
+.reveal .poll-results.scale .stack {
+	display: flex;
+	height: 1.6em;
+	border-radius: 3px;
+	overflow: hidden;
+	background: var(--poll-faint);
+}
+.reveal .poll-results .seg,
+.reveal .poll-results .swatch {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 0.8em;
+	color: #222;
+	font-variant-numeric: tabular-nums;
+}
+.reveal .poll-results .seg.dark,
+.reveal .poll-results .swatch.dark {
+	color: #fff;
+}
+.reveal .poll-results.scale .mean {
+	min-width: 2em;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+	color: var(--poll-muted);
+}
+.reveal .poll-results .key {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.25em;
+	margin-top: 0.6em;
+	font-size: 0.85em;
+}
+.reveal .poll-results .key .swatch {
+	width: 1.8em;
+	height: 1.4em;
+	border-radius: 2px;
+}
+.reveal .poll-results .key .end {
+	margin: 0 0.5em;
+	color: var(--poll-muted);
+}
+/* Premises: per statement, how many accept it against the halfway mark. */
+.reveal .poll-results.premises .chart {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1.5fr) minmax(0, 1fr) max-content 1.1em;
+	gap: 0.5em 0.7em;
+	align-items: center;
+	align-content: center;
+}
+.reveal .poll-results.premises .tag {
+	font-weight: 600;
+	color: var(--poll-accent);
+}
+.reveal .poll-results.premises .tag.conclusion {
+	color: var(--poll-text);
+	text-decoration: underline;
+}
+.reveal .poll-results .track {
+	position: relative;
+	height: 1.3em;
+	border-radius: 2px;
+	background: var(--poll-faint);
+}
+.reveal .poll-results .track .bar {
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	transition: width 400ms ease;
+}
+.reveal .poll-results .track .half {
+	position: absolute;
+	left: 50%;
+	top: -0.25em;
+	bottom: -0.25em;
+	border-left: 2px dashed var(--poll-muted);
+}
+.reveal .poll-results .verdict.accept {
+	color: var(--poll-accent);
+}
+.reveal .poll-results .verdict.reject {
+	color: var(--poll-highlight);
+}
+/* Ranking by voting rule: a table. */
+.reveal .poll-results.rules .chart {
+	display: grid;
+	grid-template-columns: max-content max-content minmax(0, 1fr);
+	gap: 0.45em 1.3em;
+	align-content: center;
+	align-items: baseline;
+}
+.reveal .poll-results.rules .head {
+	font-weight: 600;
+	border-bottom: 1px solid var(--poll-accent);
+	padding-bottom: 0.15em;
+}
+.reveal .poll-results.rules .note {
+	display: block;
+	font-size: 0.75em;
+	color: var(--poll-muted);
+}
+.reveal .poll-results.rules .winner {
+	font-weight: 600;
+}
+/* Word cloud: an SVG laid out by d3-cloud (see layoutCloud()); the words
+   glide to new places as answers arrive. */
+.reveal .poll-results.words .chart {
+	position: relative;
+	overflow: hidden;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.reveal .poll-results.words svg {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+.reveal .poll-results.words svg g,
+.reveal .poll-results.words svg text {
+	transform-box: view-box;
+	transform-origin: 0 0;
+	transition: transform 0.7s ease, font-size 0.7s ease, opacity 0.5s ease, fill 0.5s ease;
+}
+.reveal .poll-results.words svg text {
+	font-weight: bold;
+}
+.reveal .poll-results.words svg text.arriving {
+	animation: poll-cloud-word-in 0.6s ease;
+}
+@keyframes poll-cloud-word-in {
+	from { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.reveal .poll-results.words svg g,
+	.reveal .poll-results.words svg text {
+		transition: none;
+		animation: none;
+	}
+}
+.reveal .poll-results.words .empty {
+	font-style: italic;
+	color: var(--poll-muted);
+}
+/* An overlay: a card over the slide below its title, placed by
+   placeOverlay(), with the poll's prompt above the chart. */
+.reveal .slides section .poll-results.overlay {
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: var(--overlay-top, 0px);
+	height: var(--overlay-height, 360px);
+	margin: 0;
+	font-size: 0.65em;		/* larger than an inline chart's: the card has the room */
+	padding: 0.8em 1.2em 0.6em;
+	box-sizing: border-box;
+	background: var(--poll-card);
+	border: 1px solid var(--poll-accent);
+	border-radius: 10px;
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+	z-index: 20;
+	transition: opacity 0.2s ease, visibility 0.2s ease;	/* not top or height: see placeOverlay() */
+}
+.reveal .poll-results .prompt {
+	text-align: center;
+	font-size: 1.25em;
+	line-height: 1.25;
+	margin-bottom: 0.6em;
+}
+
+/* The right answer, or a game's winner (see decorate()); marks on a number
+   chart; the lines under a chart. */
+.reveal .poll-results .bar.win {
+	background: var(--poll-highlight);
+}
+.reveal .poll-results .label.win {
+	font-weight: 600;
+	color: var(--poll-highlight);
+}
+.reveal .poll-results.choice .label.win::after {
+	content: ' ✓';
+}
+.reveal .poll-results .mark {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	border-left: 2px dashed var(--poll-highlight);
+	pointer-events: none;
+}
+.reveal .poll-results .mark span {
+	position: absolute;
+	top: -0.2em;
+	left: 0.25em;
+	white-space: nowrap;
+	font-size: 0.8em;
+	color: var(--poll-highlight);
+	background: color-mix(in srgb, var(--poll-card) 85%, transparent);
+	padding: 0 0.2em;
+}
+.reveal .poll-results .mark.average {
+	border-left-color: var(--poll-text);
+}
+.reveal .poll-results .mark.average span {
+	color: var(--poll-text);
+	top: 1.1em;
+}
+.reveal .poll-results .mark.level {
+	border-left: 1px dotted var(--poll-muted);
+}
+.reveal .poll-results .mark.level span {
+	color: var(--poll-muted);
+	top: auto;
+	bottom: 0;
+}
+.reveal .poll-results.long-labels .label {
+	font-size: 0.75em;
+}
+.reveal .poll-results .extra {
+	text-align: center;
+	margin-top: 0.3em;
+	line-height: 1.25;
+}
+
+/* Before and after (see drawCompare()): a flow between two columns of
+   blocks; a slope chart; or each row's average before and after. */
+.reveal .poll-results.compare .chart.flow {
+	margin-bottom: 0.5em;		/* room for a label at the foot */
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, 1fr);
+	position: relative;
+}
+.reveal .poll-results .flow .side,
+.reveal .poll-results .flow .middle {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+.reveal .poll-results .flow .flow-head {
+	height: 1.4em;
+	text-align: center;
+	font-weight: 600;
+	color: var(--poll-muted);
+}
+.reveal .poll-results .flow .track {
+	position: relative;
+	flex: 1;
+	height: auto;
+	background: none;
+}
+.reveal .poll-results .flow .block {
+	position: absolute;
+	width: 1.1em;
+	border-radius: 2px;
+}
+.reveal .poll-results .flow .block.empty {
+	opacity: 0.25;
+}
+.reveal .poll-results .flow .side-0 .block {
+	right: 0;
+}
+.reveal .poll-results .flow .side-1 .block {
+	left: 0;
+}
+.reveal .poll-results .flow .name {
+	position: absolute;
+	transform: translateY(-50%);
+	white-space: nowrap;
+	line-height: 1.1;
+}
+.reveal .poll-results .flow .side-0 .name {
+	right: 1.5em;
+	text-align: right;
+}
+.reveal .poll-results .flow .side-1 .name {
+	left: 1.5em;
+}
+.reveal .poll-results .flow .name .n {
+	color: var(--poll-muted);
+	font-variant-numeric: tabular-nums;
+}
+.reveal .poll-results .flow svg.bands {
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+}
+.reveal .poll-results .flow > .empty,
+.reveal .poll-results .slope .empty {
+	position: absolute;
+	inset: 40% 0 auto;
+	text-align: center;
+	font-style: italic;
+	color: var(--poll-muted);
+}
+.reveal .poll-results .chart.slope {
+	position: relative;
+	margin: 0 6%;
+}
+.reveal .poll-results .slope svg {
+	position: absolute;
+	inset: 1.6em 0 0;
+	width: 100%;
+	height: calc(100% - 1.6em);
+	overflow: visible;
+}
+.reveal .poll-results .slope line {
+	vector-effect: non-scaling-stroke;
+	stroke-width: 2;
+	stroke-opacity: 0.55;
+}
+.reveal .poll-results .slope line.axis { stroke: var(--poll-muted); stroke-opacity: 0.6; stroke-width: 1.5; }
+.reveal .poll-results .slope line.up { stroke: var(--poll-accent); }
+.reveal .poll-results .slope line.down { stroke: var(--poll-highlight); }
+.reveal .poll-results .slope line.level { stroke: var(--poll-muted); }
+.reveal .poll-results .slope line.means { stroke: var(--poll-text); stroke-width: 5; stroke-opacity: 0.9; }
+.reveal .poll-results .slope .labels {
+	position: absolute;
+	inset: 1.6em 0 0;
+}
+.reveal .poll-results .slope .labels span {
+	position: absolute;
+	transform: translate(-50%, -50%);
+	font-size: 0.85em;
+	color: var(--poll-muted);
+	white-space: nowrap;
+}
+.reveal .poll-results .slope .titles {
+	display: flex;
+	justify-content: space-between;
+	font-weight: 600;
+	color: var(--poll-muted);
+	padding: 0 4%;
+}
+.reveal .poll-results .chart.rows {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) max-content 1.5em max-content;
+	gap: 0.45em 1em;
+	align-content: center;
+	align-items: baseline;
+}
+.reveal .poll-results .rows .head {
+	font-weight: 600;
+	color: var(--poll-muted);
+}
+.reveal .poll-results .rows .value {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+.reveal .poll-results .rows .arrow {
+	text-align: center;
+	color: var(--poll-highlight);
+	font-weight: 600;
+}
+
+/* Self versus others, and points: a row per item, a bar to its average,
+   dots for the answers (see drawSelfOthers() and drawPoints()). */
+.reveal .poll-results .chart.rows-bars {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 3.2em;
+	gap: 0.55em 0.8em;
+	align-items: center;
+	align-content: center;
+}
+.reveal .poll-results .rows-bars .track .bar {
+	opacity: 0.85;
+}
+.reveal .poll-results .rows-bars .bar.guess,
+.reveal .poll-results .rows-bars .bar.group {
+	background: var(--poll-colour-4);
+}
+.reveal .poll-results .rows-bars .bar.group {
+	opacity: 0.55;
+}
+.reveal .poll-results .rows-bars .track {
+	height: 1.5em;
+}
+.reveal .poll-results .rows-bars .dot {
+	position: absolute;
+	width: 0.42em;
+	height: 0.42em;
+	margin: -0.21em 0 0 -0.21em;
+	border-radius: 50%;
+	background: var(--poll-text);
+	opacity: 0.6;
+}
+.reveal .poll-results .rows-bars .truth-line {
+	position: absolute;
+	top: -0.3em;
+	bottom: -0.3em;
+	border-left: 2px dashed var(--poll-highlight);
+}
+.reveal .poll-results .rows-bars .count {
+	text-align: right;
+}
+
+/* A 2×2 grid (see drawGrid()). */
+.reveal .poll-results .chart.grid2 {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 1.2em;
+}
+.reveal .poll-results .grid2 svg {
+	height: 100%;
+	max-width: 60%;
+	overflow: visible;
+}
+.reveal .poll-results .grid2 .frame { fill: var(--poll-faint); stroke: var(--poll-muted); stroke-width: 0.4; }
+.reveal .poll-results .grid2 .mid { stroke: var(--poll-muted); stroke-width: 0.25; stroke-dasharray: 1.5 1.5; }
+.reveal .poll-results .grid2 .axis { font-size: 4.2px; fill: var(--poll-muted); }
+.reveal .poll-results .grid2 .one { opacity: 0.35; }
+.reveal .poll-results .grid2 .mean { stroke: #fff; stroke-width: 0.6; }
+.reveal .poll-results .grid2 .num { font-size: 4px; font-weight: 700; fill: #fff; }
+.reveal .poll-results .grid2 .legend {
+	margin: 0;
+	padding-left: 1.6em;
+	max-width: 38%;
+}
+.reveal .poll-results .grid2 .legend li {
+	margin: 0.2em 0;
+	line-height: 1.2;
+}
+.reveal .poll-results .grid2 .legend li::marker {
+	color: var(--colour);
+	font-weight: 700;
+}
+
+/* Pin on an image (see drawPin()). */
+.reveal .poll-results .chart.pin {
+	position: relative;
+	overflow: hidden;
+}
+.reveal .poll-results .pinwrap {
+	position: absolute;		/* sized and centred by paintPins() */
+}
+.reveal .poll-results .pinwrap img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	max-width: none;
+	max-height: none;
+	border: 0;
+	box-shadow: none;
+}
+.reveal .poll-results .pinwrap canvas {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+}
+
+/* The board of shared questions (see showBoard()). */
+.reveal .qa-board {
+	font-size: 0.6em;
+	text-align: left;
+}
+.reveal .qa-board .qa-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+.reveal .qa-board .qa-list li {
+	display: flex;
+	gap: 0.8em;
+	align-items: baseline;
+	padding: 0.35em 0.6em;
+	margin-bottom: 0.35em;
+	border-left: 3px solid var(--poll-accent);
+	background: var(--poll-faint);
+	line-height: 1.25;
+}
+.reveal .qa-board .votes {
+	flex: none;
+	min-width: 3.2em;
+	font-weight: 600;
+	color: var(--poll-accent);
+	font-variant-numeric: tabular-nums;
+}
+.reveal .qa-board .qa-empty,
+.reveal .qa-board .qa-more {
+	font-style: italic;
+	color: var(--poll-muted);
+}
+
+/* Reactions floating up the right of the screen (see showReaction()). */
+.reveal .reaction-float {
+	position: absolute;
+	bottom: calc(40px * var(--slide-scale, 1));
+	z-index: 40;
+	font-size: calc(44px * var(--slide-scale, 1));
+	pointer-events: none;
+	animation: poll-reaction-up 3.2s ease-out forwards;
+}
+@keyframes poll-reaction-up {
+	0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
+	12% { opacity: 1; transform: translate(0, -8vh) scale(1); }
+	100% { transform: translate(var(--drift, 0), -62vh) scale(1.1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.reveal .reaction-float { animation: poll-reaction-fade 2s ease-out forwards; }
+	@keyframes poll-reaction-fade { from { opacity: 1; } to { opacity: 0; } }
+}

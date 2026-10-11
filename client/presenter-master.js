@@ -11,6 +11,11 @@
  * presenter view that has just woken up or reconnected learns where the talk
  * is only from the next message; without the heartbeat it would show a stale
  * slide until the next click.
+ *
+ * With audience questions on (PresenterConfig.questionsKey), a ?master deck
+ * also loads presenter-polls.js and presenter-polls.css from beside this file:
+ * live polls, the board of shared questions and floating reactions.  Nothing
+ * of that is loaded, or done, without ?master.
  */
 (function () {
 	'use strict';
@@ -26,8 +31,8 @@
 	}
 	const RELAY = config.relay.replace(/\/+$/, '');
 	const HEARTBEAT_MS = config.heartbeatMs || 3000;
-	// Where this script was loaded from, for finding vendor/qr-studio.js.  Only
-	// available now, while the script first runs.
+	// Where this script was loaded from, for finding vendor/qr-studio.js and
+	// presenter-polls.js.  Only available now, while the script first runs.
 	const SCRIPT_URL = (document.currentScript && document.currentScript.src) || location.href;
 
 	// Announce the deck's path without ?master, so the presenter's own copies of
@@ -42,6 +47,10 @@
 
 	let ready = false;
 	let socket = null;
+	const socketWaiters = [];		// called with the socket once it exists (the poll module)
+	// The poll module may change the position sent to the tablet: an overlay
+	// chart is a step only in this copy of the deck, so it is left out.
+	let stateFilter = state => state;
 
 	function isReady() {
 		if (!ready) {
@@ -56,7 +65,7 @@
 			socketId: config.channel,
 			secret: secret,
 			deck: DECK_PATH,
-			state: deck().getState()
+			state: stateFilter(deck().getState())
 		});
 	}
 
@@ -92,6 +101,14 @@
 	const QUESTIONS = /^[0-9a-f]{64}$/.test(config.questionsKey || '');
 	let questionCode = null;
 
+	// What the ask page offers besides questions, sent with them: the deck's
+	// reactions (PresenterConfig.reactions: a list of emoji, or one string of
+	// them separated by spaces; none by default) and the "Lost?" toggle
+	// (PresenterConfig.pace: on unless false).
+	const reactions = Array.isArray(config.reactions) ? config.reactions.map(String)
+		: typeof config.reactions === 'string' ? config.reactions.trim().split(/\s+/).filter(Boolean) : [];
+	const AUDIENCE = { reactions: reactions.slice(0, 8), pace: config.pace !== false };
+
 	async function deriveCode() {
 		const d = new Date();
 		const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -99,9 +116,18 @@
 		return String(new DataView(buffer).getUint32(0) % 10000).padStart(4, '0');
 	}
 
+	// The relay's reply to questions-open carries the board of shared
+	// questions, which the poll module shows; kept for a module that loads late.
+	let opened = null;
+	const openedListeners = [];
 	function openQuestions() {
 		if (!questionCode || !socket || !socket.connected) return;
-		socket.emit('questions-open', { socketId: config.channel, secret: secret, code: questionCode, keyHash: config.questionsKey });
+		socket.emit('questions-open', { socketId: config.channel, secret: secret, code: questionCode, keyHash: config.questionsKey,
+			audience: AUDIENCE }, res => {
+			if (!res || !res.ok) return;
+			opened = res;
+			openedListeners.forEach(fn => fn(res));
+		});
 	}
 
 	// A QR code for the ask page with today's code already filled in, drawn into
@@ -145,6 +171,39 @@
 		else console.warn('[presenter] questions need a secure context (https or localhost) to derive the code');
 	}
 
+	// Polls, the board and reactions (presenter-polls.js), which ride on the
+	// questions: phones join with the day's code.  The module and its
+	// stylesheet are loaded from beside this script, or from
+	// PresenterConfig.pollsScript and pollsStyle; PresenterConfig.polls = false
+	// leaves them out.  The module is handed what it needs, below, and nothing
+	// is put on window.
+	function loadPolls() {
+		const link = document.createElement('link');
+		link.rel = 'stylesheet';
+		link.href = config.pollsStyle || new URL('presenter-polls.css', SCRIPT_URL).href;
+		const styled = new Promise(resolve => { link.onload = link.onerror = resolve; });
+		document.head.appendChild(link);
+		const api = {
+			config: config,
+			secret: secret,
+			channel: config.channel,
+			audience: AUDIENCE,
+			deck: deck,
+			isReady: isReady,
+			broadcast: broadcast,
+			setStateFilter: fn => { stateFilter = fn; },
+			// fn(socket), once the Socket.IO client has loaded and connected (or
+			// at once, if it already has).
+			onSocket: fn => { if (socket) fn(socket); else socketWaiters.push(fn); },
+			// fn(reply) for each accepted questions-open: { ok, board }.
+			onQuestionsOpened: fn => { openedListeners.push(fn); if (opened) fn(opened); }
+		};
+		Promise.all([import(config.pollsScript || new URL('presenter-polls.js', SCRIPT_URL).href), styled])
+			.then(([module]) => module.default(api))
+			.catch(e => console.warn('[presenter] could not load the poll support (presenter-polls.js)', e));
+	}
+	if (QUESTIONS && config.polls !== false) loadPolls();
+
 	// Load the Socket.IO client from the relay asynchronously, so that an
 	// unreachable relay can never hold up the presentation itself.
 	const script = document.createElement('script');
@@ -153,6 +212,7 @@
 		socket = io(RELAY);
 		socket.on('connect', () => { console.log('[presenter] broadcasting ' + DECK_PATH); broadcast(); openQuestions(); });
 		socket.on('disconnect', () => console.warn('[presenter] relay disconnected; reconnecting'));
+		socketWaiters.splice(0).forEach(fn => fn(socket));
 	};
 	script.onerror = () => console.warn('[presenter] relay unreachable at ' + RELAY + '; the presenter view will not follow');
 	document.head.appendChild(script);

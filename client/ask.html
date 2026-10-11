@@ -1,11 +1,31 @@
 <!doctype html>
 <!--
-	reveal.js-presenter — the audience's page for sending a question to the
-	presenter's tablet (presenter.html), through the relay.
+	reveal.js-presenter — the audience's page: a question for the presenter's
+	tablet (presenter.html), and the live polls, through the relay.
 
 	A question goes through only with the 4-digit code shown on a slide (it
 	changes daily), and only while the presenter's tablet is listening; it is
-	never stored.  ?code=1234 pre-fills the code, e.g. from a QR code.
+	never stored.  ?code=1234, as in the laptop's QR code, fills in the code and
+	hides its field; the field comes back if the relay refuses the code.
+
+	While the laptop has a poll open (its slide is showing), the page becomes
+	"Live poll", with the slide's instructions under the title, and shows the
+	poll in place of the question form: buttons (one or several picks); a
+	slider, or a field to type in, for a wider number range; a rating per
+	statement (scale); accept or reject per statement (premises); options
+	tapped in order (ranking); words to add (a word cloud, shown on the screen
+	once the presenter approves them); your own answer and a guess at the
+	room's (self-others); points to share out; a square to tap per item
+	(grid); a picture to tap (pin).  An answer can be changed while the poll is
+	open; the phone counts once, by a random id kept in its localStorage.
+	Below the question form are the questions the presenter has shared from
+	the tablet, to vote on; at the foot, when the deck offers them, reactions
+	(which float up the laptop's screen) and "Lost?" (a count on the tablet
+	alone).
+
+	The poll controls are Web Awesome 3.14 components (free, MIT), loaded from
+	jsDelivr, or from PresenterConfig.webAwesome.  Every text from the deck or
+	the audience is set with textContent, never innerHTML.
 -->
 <html lang="en">
 <head>
@@ -14,6 +34,29 @@
 	<meta name="robots" content="noindex">
 	<title>Ask a question</title>
 	<script src="presenter-config.js"></script>
+	<script>
+		// Web Awesome, for the poll controls: only its theme's design tokens (not
+		// its styles for native elements) and the loader, which defines each
+		// component as it first appears.  Its dark tokens follow a class, not
+		// the media query, so the class follows the phone's setting.
+		(function () {
+			const config = window.PresenterConfig || {};
+			if (!/^[0-9a-f]{64}$/.test(config.questionsKey || '')) return;
+			const base = (config.webAwesome || 'https://cdn.jsdelivr.net/npm/@awesome.me/webawesome@3.14.0/dist-cdn').replace(/\/+$/, '');
+			const link = document.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = base + '/styles/themes/default.css';
+			document.head.appendChild(link);
+			const loader = document.createElement('script');
+			loader.type = 'module';
+			loader.src = base + '/webawesome.loader.js';		// its address tells it where the components are
+			document.head.appendChild(loader);
+			const dark = matchMedia('(prefers-color-scheme: dark)');
+			const apply = () => document.documentElement.classList.toggle('wa-dark', dark.matches);
+			apply();
+			dark.addEventListener('change', apply);
+		})();
+	</script>
 	<style>
 		:root {
 			--bg: #faf8f2;
@@ -24,15 +67,38 @@
 			--field: #fff;
 			--ok: #2e7d32;
 			--bad: #b3261e;
+			--on-accent: #fff;		/* text on the accent colour */
 			color-scheme: light dark;
 		}
 		@media (prefers-color-scheme: dark) {
 			:root:not([data-theme="light"]) {
 				--bg: #161616; --text: #ececec; --muted: #9a9a9a; --border: #3a3a3a; --field: #1f1f1f;
-				--accent: rgb(201, 169, 97); --ok: #6fcf73; --bad: #ff8a80;
+				--accent: rgb(201, 169, 97); --ok: #6fcf73; --bad: #ff8a80; --on-accent: #1d1708;
 			}
 		}
+		/* Web Awesome's brand colour, from the accent. */
+		:root {
+			--wa-color-brand-95: color-mix(in oklab, var(--accent) 8%, white);
+			--wa-color-brand-90: color-mix(in oklab, var(--accent) 16%, white);
+			--wa-color-brand-80: color-mix(in oklab, var(--accent) 32%, white);
+			--wa-color-brand-70: color-mix(in oklab, var(--accent) 52%, white);
+			--wa-color-brand-60: color-mix(in oklab, var(--accent) 78%, white);
+			--wa-color-brand-50: var(--accent);
+			--wa-color-brand-40: color-mix(in oklab, var(--accent) 82%, black);
+			--wa-color-brand-30: color-mix(in oklab, var(--accent) 64%, black);
+			--wa-color-brand-20: color-mix(in oklab, var(--accent) 46%, black);
+			--wa-color-brand-10: color-mix(in oklab, var(--accent) 30%, black);
+			--wa-color-brand-05: color-mix(in oklab, var(--accent) 18%, black);
+			--wa-color-brand-on-loud: var(--on-accent);
+			--wa-color-surface-default: var(--field);
+			--wa-form-control-background-color: var(--field);
+			--wa-form-control-border-color: var(--border);
+			--wa-color-text-normal: var(--text);
+			--wa-color-focus: var(--accent);
+			--wa-font-family-body: -apple-system, system-ui, sans-serif;
+		}
 		* { box-sizing: border-box; }
+		[hidden] { display: none !important; }	/* else a display rule below would override it */
 		body { margin: 0; background: var(--bg); color: var(--text);
 			font: 17px/1.45 -apple-system, system-ui, sans-serif; }
 		main { max-width: 34rem; margin: 0 auto; padding: 24px 16px 40px; }
@@ -46,23 +112,126 @@
 		input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 		.counter { text-align: right; color: var(--muted); font-size: 14px; margin-top: 4px; }
 		button { margin-top: 16px; width: 100%; font: inherit; font-weight: 600; padding: 12px; border: 0;
-			border-radius: 8px; background: var(--accent); color: #fff; }
+			border-radius: 8px; background: var(--accent); color: var(--on-accent); }
 		button:disabled { opacity: 0.5; }
 		.status { min-height: 1.5em; margin-top: 14px; }
 		.status.ok { color: var(--ok); }
 		.status.bad { color: var(--bad); }
 		.note { color: var(--muted); font-size: 14px; margin-top: 24px; }
+
+		/* A live poll, in place of the question form. */
+		#form-heading { font-size: 20px; margin: 20px 0 0; }
+		.poll { margin: 4px 0 20px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--field); }
+		.poll h2 { font-size: 20px; margin: 0 0 14px; }
+		.poll-options { display: grid; gap: 8px; }
+		.poll-options.numbers { grid-template-columns: repeat(auto-fill, minmax(4.2em, 1fr)); }
+		.poll button { margin-top: 0; }
+		.poll .opt { background: var(--bg); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+		.poll .opt[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+		.poll-item { margin: 0 0 18px; }
+		.poll-item .statement { margin: 0 0 8px; }
+		.poll-item .tag { display: block; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+		.poll-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 4px; font-size: 13px; color: var(--muted); }
+		.poll-rank { display: grid; gap: 8px; }
+		.poll-rank button { display: flex; align-items: center; gap: 12px; text-align: left; }
+		.poll-rank .badge { flex: none; width: 1.9em; height: 1.9em; border-radius: 50%; border: 1px solid var(--border);
+			display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+		.poll-rank button[aria-pressed="true"] .badge { background: var(--on-accent); color: var(--accent); border-color: var(--on-accent); }
+		#poll-submit { margin-top: 14px; }
+
+		.poll-slider { display: grid; grid-template-columns: 1fr 4.5em; gap: 10px 12px; align-items: center; }
+		.poll-slider output { font-size: 18px; font-variant-numeric: tabular-nums; text-align: right; }
+		.poll-slider wa-button { grid-column: 1 / -1; }
+		.poll wa-button { display: block; }
+		.poll wa-button::part(base) { width: 100%; }
+		.poll-item wa-rating { --symbol-color-active: var(--accent); font-size: 34px; }
+		.poll-item wa-radio-group { display: block; }
+		.poll-item wa-radio { flex: 1; }
+		.poll-item wa-radio[appearance="button"]:state(checked) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+		.poll wa-checkbox-group { --gap: 14px; }
+		.poll wa-checkbox { font-size: 17px; }
+		.poll wa-tag-input { display: block; }
+		button.link { width: auto; background: none; color: var(--accent); padding: 4px 0; margin-top: 4px; }
+
+		/* A number to type (a wide number poll); points. */
+		.poll-field { display: flex; align-items: center; gap: 10px; }
+		.poll-field input { width: 10em; font-size: 22px; font-variant-numeric: tabular-nums; }
+		.poll-field .unit, .poll-hint { color: var(--muted); }
+		.poll-hint { font-size: 14px; margin: 6px 0 0; }
+		.points-left { margin: 4px 0 0; color: var(--muted); }
+		.points-left.ok { color: var(--ok); }
+		.poll-item .poll-options { margin-top: 4px; }
+
+		/* A 2×2 grid: a square to tap per item, its axes labelled; a picture to
+		   pin.  The dot marks where it was tapped. */
+		.grid-wrap { display: grid; grid-template-columns: 1.5em 1fr; gap: 4px; max-width: 22rem; }
+		.y-axis { writing-mode: vertical-rl; transform: rotate(180deg); display: flex; justify-content: space-between;
+			font-size: 13px; color: var(--muted); }
+		.x-axis { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+		.grid-square { position: relative; aspect-ratio: 1; border: 1px solid var(--border); border-radius: 6px; cursor: crosshair;
+			background:
+				linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat,
+				linear-gradient(var(--border), var(--border)) center / 100% 1px no-repeat,
+				var(--bg); }
+		.pin-wrap { position: relative; cursor: crosshair; line-height: 0; }
+		.pin-wrap img { width: 100%; height: auto; border-radius: 6px; -webkit-user-select: none; user-select: none; }
+		.grid-square .dot, .pin-wrap .dot { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+			background: var(--accent); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4); pointer-events: none; }
+
+		/* The board of shared questions. */
+		.board { margin-top: 28px; }
+		.board h2 { font-size: 20px; margin: 0 0 4px; }
+		.board .hint { color: var(--muted); font-size: 14px; margin: 0 0 10px; }
+		.board ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+		.board li { display: flex; gap: 12px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border);
+			border-radius: 8px; background: var(--field); }
+		.board li .text { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+		.board button.vote { flex: none; width: 3.4em; margin: 0; padding: 4px 0; display: flex; flex-direction: column; align-items: center;
+			background: var(--bg); color: var(--text); border: 1px solid var(--border); font-variant-numeric: tabular-nums; line-height: 1.2; }
+		.board button.vote[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+		.board button.vote .arrow { font-size: 13px; }
+
+		/* Reactions and "Lost?": a bar at the foot of the screen. */
+		body.live-on main { padding-bottom: 130px; }
+		.live { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 8px;
+			padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--bg); border-top: 1px solid var(--border); }
+		.reactions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+		.reactions button.react { width: auto; margin: 0; padding: 6px 12px; font-size: 26px; line-height: 1.1; background: var(--field);
+			border: 1px solid var(--border); border-radius: 999px; }
+		.reactions button.react:disabled { opacity: 0.6; }
+		.reactions button.react.sent { animation: react-pop 0.5s ease; }
+		@keyframes react-pop { 40% { transform: scale(1.3); } }
+		button.pace { width: auto; margin: 0; padding: 7px 14px; font-size: 15px; font-weight: 500; background: none; color: var(--muted);
+			border: 1px solid var(--border); border-radius: 999px; }
+		button.pace[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
 	</style>
 </head>
 <body>
 	<main>
-		<h1>Ask a question</h1>
-		<p class="lead">It goes straight to the lecturer’s screen, anonymously.</p>
+		<h1 id="heading">Ask a question</h1>
+		<p class="lead" id="lead">It goes straight to the presenter’s screen, anonymously.</p>
 
-		<form id="form" novalidate>
+		<div id="code-field">
 			<label for="code">Code from the slide</label>
 			<input id="code" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" required>
+		</div>
 
+		<section id="poll" class="poll" hidden>
+			<h2 id="poll-prompt"></h2>
+			<div id="poll-options" class="poll-options"></div>
+			<div id="poll-slider" class="poll-slider" hidden>
+				<wa-slider id="poll-range" step="1" with-tooltip></wa-slider>
+				<output id="poll-value" for="poll-range"></output>
+				<wa-button id="poll-send" variant="brand">Send</wa-button>
+			</div>
+			<div id="poll-body"></div>
+			<wa-button id="poll-submit" variant="brand" hidden>Send</wa-button>
+			<p class="status" id="poll-status" role="status" aria-live="polite"></p>
+		</section>
+		<button id="to-question" class="link" type="button" hidden>Ask a question instead</button>
+
+		<form id="form" novalidate>
+			<h2 id="form-heading" hidden>Ask a question</h2>
 			<label for="text">Your question</label>
 			<textarea id="text" maxlength="280" required></textarea>
 			<div class="counter"><span id="left">280</span> characters left</div>
@@ -71,11 +240,28 @@
 			<p class="status" id="status" role="status" aria-live="polite"></p>
 		</form>
 
-		<p class="note">
-			Questions are not stored anywhere: they are shown to the lecturer during the
-			lecture and then discarded.  Your name is not attached.
+		<section id="board" class="board" hidden aria-labelledby="board-heading">
+			<h2 id="board-heading">Questions from the room</h2>
+			<p class="hint">The presenter has shared these.  Vote for the ones you’d like answered.</p>
+			<ol id="board-list"></ol>
+		</section>
+
+		<p class="note" id="poll-note" hidden>
+			Poll answers are anonymous: the presenter’s screen shows them together,
+			never who gave which.
+		</p>
+		<p class="note" id="question-note">
+			Questions are not stored anywhere: they are shown to the presenter during
+			the talk and then discarded.  Your name is not attached.  The presenter may
+			share a question with the room, for everyone to vote on; it is then kept,
+			still without a name, for up to three hours.
 		</p>
 	</main>
+
+	<div id="live" class="live" hidden>
+		<div id="reactions" class="reactions" role="group" aria-label="Reactions" hidden></div>
+		<button id="pace" class="pace" type="button" aria-pressed="false" hidden></button>
+	</div>
 
 	<script>
 	(function () {
@@ -86,14 +272,14 @@
 
 		if (!config.relay || !config.channel || !/^[0-9a-f]{64}$/.test(config.questionsKey || '')) {
 			status('Questions are not set up for this presentation.', 'bad');
-			$('form').querySelectorAll('input, textarea, button').forEach(e => { e.disabled = true; });
+			document.querySelectorAll('#code, #form textarea, #form button').forEach(e => { e.disabled = true; });
 			return;
 		}
 
 		const MESSAGES = {
 			code: 'That code doesn’t match the one on the slide.',
 			closed: 'Questions aren’t open right now.',
-			offline: 'The lecturer’s screen isn’t connected, so your question wasn’t delivered.  Please try again shortly.',
+			offline: 'The presenter’s screen isn’t connected, so your question wasn’t delivered.  Please try again shortly.',
 			slow: 'Please wait a few seconds before sending another question.',
 			busy: 'Lots of questions are arriving at once.  Please try again in a minute.',
 			invalid: 'Questions must be between 1 and 280 characters.'
@@ -102,6 +288,8 @@
 		const code = new URLSearchParams(location.search).get('code');
 		if (/^\d{4}$/.test(code || '')) $('code').value = code;
 		else { try { $('code').value = sessionStorage.getItem('ask-code') || ''; } catch (e) { /* storage blocked */ } }
+		// A code from the QR code (or an earlier question) needn't be shown.
+		$('code-field').hidden = /^\d{4}$/.test($('code').value);
 
 		let socket = null;
 		const ready = () => {
@@ -109,14 +297,614 @@
 			$('left').textContent = 280 - n;
 			$('send').disabled = !(socket && socket.connected && /^\d{4}$/.test($('code').value) && $('text').value.trim());
 		};
-		$('code').addEventListener('input', () => { $('code').value = $('code').value.replace(/\D/g, '').slice(0, 4); ready(); });
+		$('code').addEventListener('input', () => {
+			$('code').value = $('code').value.replace(/\D/g, '').slice(0, 4);
+			ready();
+			if ($('code').value.length === 4) join();
+		});
 		$('text').addEventListener('input', ready);
+
+		// ---- Polls
+		const POLL_MESSAGES = {
+			closed: 'This poll has closed.',
+			code: MESSAGES.code,
+			invalid: 'That answer isn’t one of the choices.',
+			slow: 'One moment, then try again.',
+			busy: 'Lots of answers are arriving at once.  Please try again in a moment.'
+		};
+		const pollStatus = (text, kind) => { $('poll-status').textContent = text; $('poll-status').className = 'status ' + (kind || ''); };
+
+		// This phone's random id, so that it counts once and may change its answer.
+		let voter = null;
+		try { voter = localStorage.getItem('ask-voter'); } catch (e) { /* storage blocked */ }
+		if (!/^[A-Za-z0-9-]{8,64}$/.test(voter || '')) {
+			voter = crypto.randomUUID ? crypto.randomUUID()
+				: [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+			try { localStorage.setItem('ask-voter', voter); } catch (e) { /* then it lasts this page only */ }
+		}
+		// "3 hrs", "1 hr", "42%": the unit is one word, or a singular and plural ("hr|hrs").
+		const withUnit = (v, unit) => {
+			const [one, many = one] = (unit || '').split('|');
+			const u = String(v) === '1' ? one : many;
+			return v + (!u ? '' : /^[A-Za-z]/.test(u) ? ' ' + u : u);
+		};
+
+		// Answers given in this tab, so a reload still shows them.
+		const answered = id => { try { return JSON.parse(sessionStorage.getItem('ask-poll:' + id)); } catch (e) { return null; } };
+		const remember = (id, value) => { try { sessionStorage.setItem('ask-poll:' + id, JSON.stringify(value)); } catch (e) { /* storage blocked */ } };
+
+		let poll = null, asking = false, joinTimer = null;
+		const QUESTION_PAGE = { title: document.title, heading: $('heading').textContent, lead: $('lead').textContent };
+
+		// Join the audience, to be sent polls.  It takes the day's code; before
+		// the laptop has opened questions, keep trying.
+		function join() {
+			clearTimeout(joinTimer);
+			if (!socket || !socket.connected || !/^\d{4}$/.test($('code').value)) return;
+			socket.timeout(10000).emit('audience-join', { channel: config.channel, code: $('code').value }, (err, res) => {
+				if (!err && res && res.ok) {
+					showPoll(res.poll);
+					if (res.board) showBoard(res.board);
+					showAudience(res.audience);
+				}
+				else if (!err && res && res.reason === 'code') {
+					$('code-field').hidden = false;
+					status(MESSAGES.code, 'bad');
+				}
+				else joinTimer = setTimeout(join, 15000);
+			});
+		}
+
+		// The kinds (see the relay): choice (one pick, or several with picks),
+		// number, scale, premises, ranking, words, self-others, points, grid and
+		// pin.  One pick, or a number with up to 13 values, is sent as soon as it
+		// is tapped; everything else is put together (the draft) and sent with
+		// the Send button, or, for words, as each is added or removed.
+		let draft = null;
+		const SUFFIX = '  You can change it while the poll is open.';
+		const button = (label, onClick, cls) => {
+			const b = document.createElement('button');
+			b.type = 'button';
+			b.textContent = label;				// the deck's text: never innerHTML
+			if (cls) b.className = cls;
+			b.addEventListener('click', onClick);
+			return b;
+		};
+		const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+		const pressed = (b, on) => b.setAttribute('aria-pressed', String(!!on));
+		const numberButtons = def => def.kind === 'number' && def.max - def.min <= 12;
+		const numberField = def => def.kind === 'number' && def.max - def.min > 100;		// typed: a slider that wide is too coarse
+		const LOCALE = navigator.language || undefined;
+
+		function defaultInstructions(def) {
+			switch (def.kind) {
+			case 'choice': return (def.picks ? `Choose up to ${def.picks}, then press Send.` : 'Tap your answer.') + SUFFIX;
+			case 'number': return (numberButtons(def) ? 'Tap your answer.' : numberField(def) ? 'Type your answer, then press Send.' : 'Choose your answer, then press Send.') + SUFFIX;
+			case 'scale': return 'Rate each statement, then press Send.' + SUFFIX;
+			case 'premises': return `${def.labels[0]} or ${def.labels[1].toLowerCase()} each statement, then press Send.` + SUFFIX;
+			case 'ranking': return 'Tap the options in order, your first choice first, then press Send.' + SUFFIX;
+			case 'words': return (def.entries > 1 ? `Type up to ${def.entries} words or short phrases.` : 'Type a word or short phrase.')
+				+ (def.moderated ? '  They appear on the screen once the presenter has approved them.' : '  They appear on the screen straight away.');
+			case 'self-others': return 'Answer for yourself, then guess how the room answered, and press Send.' + SUFFIX;
+			case 'points': return (def.unit === '%' || (!def.unit && def.total === 100) ? 'Share out 100% among the options' : `Share ${def.total} ${def.unit || 'points'} among the options`)
+				+ ', then press Send.' + SUFFIX;
+			case 'grid': return (def.items.length > 1 ? 'Tap each square to place each item' : 'Tap the square to place it') + ', then press Send.' + SUFFIX;
+			case 'pin': return 'Tap the picture to place your pin, then press Send.' + SUFFIX;
+			}
+			return '';
+		}
+
+		function showPoll(def) {
+			const same = def && poll && def.id === poll.id;
+			poll = def || null;
+			$('poll').hidden = !poll;
+			$('form').hidden = !!poll && !asking;
+			$('to-question').hidden = !poll || asking;
+			$('form-heading').hidden = !poll;
+			$('poll-note').hidden = !poll || asking;
+			$('question-note').hidden = !!poll && !asking;
+			showBoardSection();
+			if (!poll) {
+				asking = false;
+				document.title = QUESTION_PAGE.title;
+				$('heading').textContent = QUESTION_PAGE.heading;
+				$('lead').textContent = QUESTION_PAGE.lead;
+				return;
+			}
+			document.title = $('heading').textContent = 'Live poll';
+			$('lead').textContent = poll.instructions || defaultInstructions(poll);		// from the slide's data-instructions
+			if (same) return;
+			$('poll-prompt').textContent = poll.prompt || 'Poll';
+			pollStatus('');
+			const chosen = answered(poll.id);
+			const options = $('poll-options');
+			options.replaceChildren();
+			options.className = 'poll-options';
+			$('poll-slider').hidden = true;
+			$('poll-body').replaceChildren();
+			$('poll-submit').hidden = true;
+			draft = null;
+			const show = { choice: showChoice, number: showNumber, scale: showScale, premises: showPremises, ranking: showRanking, words: showWords,
+				'self-others': showSelfOthers, points: showPoints, grid: showGrid, pin: showPin }[poll.kind];
+			if (show) show(poll, chosen);
+			else pollStatus('This page can’t show this kind of poll.  Please reload it.', 'bad');
+			refresh();
+			if (chosen !== null && poll.kind !== 'words') pollStatus('Your answer is in.  You can change it.', 'ok');
+		}
+
+		// Web Awesome elements; a value given before the element is defined is
+		// set as an attribute, which it reads when it is.
+		const wa = (tag, attrs = {}, text) => {
+			const e = document.createElement('wa-' + tag);
+			for (const [k, v] of Object.entries(attrs)) if (v !== false && v !== null && v !== undefined) e.setAttribute(k, v === true ? '' : v);
+			if (text !== undefined) e.textContent = text;		// the deck's text: never innerHTML
+			return e;
+		};
+
+		// One pick, sent when tapped; or several, ticked and sent with Send.
+		function showChoice(def, chosen) {
+			if (!def.picks) {
+				const options = $('poll-options');
+				def.options.forEach((label, value) => {
+					const b = button(label, () => answer(value), 'opt');
+					b.dataset.value = value;
+					pressed(b, chosen === value);
+					options.append(b);
+				});
+				return;
+			}
+			draft = new Set(Array.isArray(chosen) ? chosen : []);
+			const group = wa('checkbox-group', { 'aria-label': def.prompt });
+			group.id = 'poll-checks';
+			def.options.forEach((label, value) => {
+				const box = wa('checkbox', { value, checked: draft.has(value), size: 'l' }, label);
+				box.addEventListener('change', () => {
+					if (box.checked && draft.size >= def.picks) {
+						box.checked = false;
+						return pollStatus(`You can choose up to ${def.picks}.  Untick one first.`, 'bad');
+					}
+					if (box.checked) draft.add(value); else draft.delete(value);
+					pollStatus('');
+					refresh();
+				});
+				group.append(box);
+			});
+			$('poll-body').append(group);
+			$('poll-submit').hidden = false;
+		}
+
+		// Buttons for up to 13 values, sent when tapped; a slider up to 101; a
+		// field to type in beyond that (a guess at a quantity, say).
+		function showNumber(def, chosen) {
+			if (numberField(def)) {
+				draft = Number.isInteger(chosen) ? chosen : null;
+				const row = el('div', 'poll-field');
+				const field = el('input');
+				Object.assign(field, { type: 'number', inputMode: 'numeric', min: def.min, max: def.max, step: 1, id: 'poll-number', value: draft ?? '' });
+				field.setAttribute('aria-label', def.prompt);
+				field.addEventListener('input', () => {
+					const v = Number(field.value);
+					draft = field.value.trim() !== '' && Number.isInteger(v) && v >= def.min && v <= def.max ? v : null;
+					refresh();
+				});
+				row.append(field);
+				const unit = withUnit(2, def.unit).replace(/^2\s?/, '');		// the plural
+				if (unit) row.append(el('span', 'unit', unit));
+				$('poll-body').append(row, el('p', 'poll-hint', `A whole number from ${def.min.toLocaleString(LOCALE)} to ${def.max.toLocaleString(LOCALE)}.`));
+				$('poll-submit').hidden = false;
+				return;
+			}
+			if (numberButtons(def)) {
+				const options = $('poll-options');
+				options.classList.add('numbers');
+				for (let v = def.min; v <= def.max; v++) {
+					const b = button(withUnit(v, def.unit), () => answer(v), 'opt');
+					b.dataset.value = v;
+					pressed(b, chosen === v);
+					options.append(b);
+				}
+				return;
+			}
+			const slider = $('poll-range');
+			const start = chosen ?? Math.round((def.min + def.max) / 2);
+			for (const [k, v] of Object.entries({ min: def.min, max: def.max, value: start })) { slider.setAttribute(k, v); slider[k] = v; }
+			slider.setAttribute('aria-label', def.prompt);
+			$('poll-value').textContent = withUnit(start, def.unit);
+			$('poll-slider').hidden = false;
+		}
+
+		// For each statement, stars for a scale from 1, or a row of numbers.
+		function showScale(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === def.statements.length ? [...chosen] : def.statements.map(() => null);
+			def.statements.forEach((text, k) => {
+				const item = el('div', 'poll-item');
+				item.append(el('p', 'statement', text));
+				let control;
+				if (def.min === 1) {
+					control = wa('rating', { max: def.max, value: draft[k] ?? 0, label: text });
+					control.addEventListener('change', () => { draft[k] = control.value >= 1 ? control.value : null; refresh(); });
+				}
+				else {
+					control = wa('radio-group', { orientation: 'horizontal', 'aria-label': text, value: draft[k] ?? null });
+					for (let v = def.min; v <= def.max; v++) control.append(wa('radio', { appearance: 'button', value: v }, String(v)));
+					control.addEventListener('change', () => { draft[k] = Number(control.value); refresh(); });
+				}
+				control.dataset.item = k;
+				item.append(control);
+				if (def.labels[0] || def.labels[1]) {
+					const ends = el('div', 'poll-ends');
+					ends.append(el('span', '', (def.min === 1 ? '1 = ' : '') + def.labels[0]), el('span', '', (def.min === 1 ? def.max + ' = ' : '') + def.labels[1]));
+					item.append(ends);
+				}
+				$('poll-body').append(item);
+			});
+			$('poll-submit').hidden = false;
+		}
+
+		// Accept or reject each statement; the conclusion is marked.
+		function showPremises(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === def.statements.length ? [...chosen] : def.statements.map(() => null);
+			let premise = 0;
+			def.statements.forEach((text, k) => {
+				const item = el('div', 'poll-item');
+				item.append(el('span', 'tag', k === def.conclusion ? 'Conclusion' : `Premise ${++premise}`), el('p', 'statement', text));
+				const group = wa('radio-group', { orientation: 'horizontal', 'aria-label': text, value: draft[k] ?? null });
+				group.append(wa('radio', { appearance: 'button', value: 1 }, def.labels[0]), wa('radio', { appearance: 'button', value: 0 }, def.labels[1]));
+				group.dataset.item = k;
+				group.addEventListener('change', () => { draft[k] = Number(group.value); refresh(); });
+				item.append(group);
+				$('poll-body').append(item);
+			});
+			$('poll-submit').hidden = false;
+		}
+
+		// Tap in order; tap a ranked option again to take it out.
+		function showRanking(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === def.options.length ? [...chosen] : [];
+			const list = el('div', 'poll-rank');
+			def.options.forEach((label, k) => {
+				const b = button('', () => {
+					const at = draft.indexOf(k);
+					if (at >= 0) draft.splice(at, 1); else draft.push(k);
+					refresh();
+				}, 'opt');
+				b.dataset.value = k;
+				b.append(el('span', 'badge'), el('span', 'label', label));
+				list.append(b);
+			});
+			$('poll-body').append(list, button('Start again', () => { draft = []; refresh(); }, 'link'));
+			$('poll-submit').hidden = false;
+		}
+
+		// A tag input: each word or phrase becomes a removable tag, and every
+		// change is sent at once.
+		function showWords(def, chosen) {
+			draft = Array.isArray(chosen) ? [...chosen] : [];
+			const tags = wa('tag-input', {
+				'max-tags': def.entries, delimiter: '', 'aria-label': def.prompt, enterkeyhint: 'done', autocapitalize: 'off',
+				placeholder: def.entries > 1 ? 'Type one, then tap return' : 'Type it, then tap return',
+				hint: def.entries > 1 ? `Up to ${def.entries}, 30 characters each.` : 'Up to 30 characters.'
+			});
+			tags.id = 'poll-tags';
+			customElements.whenDefined('wa-tag-input').then(() => { tags.value = [...draft]; });
+			tags.addEventListener('wa-create', e => {
+				const w = e.detail.inputValue.trim().replace(/\s+/g, ' ');
+				if (!w || [...w].length > 30 || draft.some(d => d.toLowerCase() === w.toLowerCase())) {
+					e.preventDefault();
+					if ([...w].length > 30) pollStatus('That’s over 30 characters.', 'bad');
+				}
+			});
+			tags.addEventListener('change', () => { draft = [...tags.value]; answer([...draft]); });
+			$('poll-body').append(tags);
+			if (draft.length) pollStatus(def.moderated ? 'Your words are in, waiting for the presenter.' : 'Your words are in.', 'ok');
+		}
+
+		// Self versus others: your own answer (buttons), then your guess at the
+		// percentage of the room giving the target option (a slider, which must
+		// be moved: there is no default guess).
+		function showSelfOthers(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === 2 ? [...chosen] : [null, null];
+			const mine = el('div', 'poll-item');
+			mine.append(el('span', 'tag', 'You'));
+			const options = el('div', 'poll-options');
+			def.options.forEach((label, k) => {
+				const b = button(label, () => { draft[0] = k; refresh(); }, 'opt');
+				b.dataset.value = k;
+				options.append(b);
+			});
+			mine.append(options);
+			const guess = el('div', 'poll-item');
+			guess.append(el('span', 'tag', 'The room'), el('p', 'statement', def.others || `What percentage of the room do you think answered “${def.options[def.target]}”?`));
+			const row = el('div', 'poll-slider');
+			const slider = wa('slider', { min: 0, max: 100, step: 1, value: draft[1] ?? 50, 'with-tooltip': true, 'aria-label': 'Your guess, as a percentage' });
+			slider.id = 'poll-guess';
+			const out = el('output', '', draft[1] === null ? 'Slide' : draft[1] + '%');
+			slider.addEventListener('input', () => { draft[1] = Number(slider.value); out.textContent = draft[1] + '%'; refresh(); });
+			row.append(slider, out);
+			guess.append(row);
+			$('poll-body').append(mine, guess);
+			$('poll-submit').hidden = false;
+		}
+
+		// Points: a slider per option; Send once they add up to the total.
+		// "Make it add up" scales what has been given so far to the total.
+		const pointsUnit = def => def.unit || (def.total === 100 ? '%' : '');
+		function showPoints(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === def.options.length ? [...chosen] : def.options.map(() => 0);
+			def.options.forEach((label, k) => {
+				const item = el('div', 'poll-item');
+				item.append(el('p', 'statement', label));
+				const row = el('div', 'poll-slider');
+				const slider = wa('slider', { min: 0, max: def.total, step: 1, value: draft[k], 'aria-label': label });
+				slider.dataset.item = k;
+				const out = el('output', '', withUnit(draft[k], pointsUnit(def)));
+				out.dataset.item = k;
+				slider.addEventListener('input', () => { draft[k] = Number(slider.value); out.textContent = withUnit(draft[k], pointsUnit(def)); refresh(); });
+				row.append(slider, out);
+				item.append(row);
+				$('poll-body').append(item);
+			});
+			const left = el('p', 'points-left');
+			left.id = 'points-left';
+			const fix = button(`Make it add up to ${withUnit(def.total, pointsUnit(def))}`, () => {
+				draft = scaledTo(draft, def.total);
+				$('poll-body').querySelectorAll('wa-slider[data-item]').forEach(s => { s.value = draft[Number(s.dataset.item)]; });
+				$('poll-body').querySelectorAll('output[data-item]').forEach(o => { o.textContent = withUnit(draft[Number(o.dataset.item)], pointsUnit(def)); });
+				refresh();
+			}, 'link');
+			fix.id = 'points-fix';
+			$('poll-body').append(left, fix);
+			$('poll-submit').hidden = false;
+		}
+		// Whole numbers in the same proportions, adding up to total (largest
+		// remainders first); an even split if nothing has been given.
+		function scaledTo(values, total) {
+			const sum = values.reduce((a, b) => a + b, 0);
+			const raw = sum ? values.map(v => v * total / sum) : values.map(() => total / values.length);
+			const out = raw.map(Math.floor);
+			const rest = total - out.reduce((a, b) => a + b, 0);
+			raw.map((v, i) => [v - out[i], i]).sort((a, b) => b[0] - a[0]).slice(0, rest).forEach(([, i]) => { out[i]++; });
+			return out;
+		}
+
+		// A tap places a dot: on a square with labelled axes (grid), or on the
+		// picture (pin).  The fractions across and down, or null if outside.
+		function tapped(e, box) {
+			const r = box.getBoundingClientRect();
+			const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+			return fx < 0 || fx > 1 || fy < 0 || fy > 1 ? null : [fx, fy];
+		}
+
+		// A 2×2 grid: for each item, a square to tap, its axes labelled.
+		function showGrid(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === def.items.length ? chosen.map(p => [...p]) : def.items.map(() => null);
+			const span = def.max - def.min;
+			def.items.forEach((text, k) => {
+				const item = el('div', 'poll-item');
+				item.append(el('p', 'statement', text));
+				const wrap = el('div', 'grid-wrap');
+				const yaxis = el('div', 'y-axis');
+				yaxis.append(el('span', '', def.y[0]), el('span', '', def.y[1]));
+				const square = el('div', 'grid-square');
+				square.dataset.item = k;
+				square.setAttribute('role', 'button');
+				square.setAttribute('aria-label', `Place “${text}”: across from ${def.x[0] || 'low'} to ${def.x[1] || 'high'}, up from ${def.y[0] || 'low'} to ${def.y[1] || 'high'}`);
+				const dot = el('span', 'dot');
+				dot.hidden = true;
+				square.append(dot);
+				square.addEventListener('click', e => {
+					const at = tapped(e, square);
+					if (!at) return;
+					draft[k] = [Math.round(def.min + at[0] * span), Math.round(def.min + (1 - at[1]) * span)];
+					refresh();
+				});
+				const xaxis = el('div', 'x-axis');
+				xaxis.append(el('span', '', def.x[0]), el('span', '', def.x[1]));
+				wrap.append(yaxis, square, el('span'), xaxis);
+				item.append(wrap);
+				$('poll-body').append(item);
+			});
+			$('poll-submit').hidden = false;
+		}
+
+		// Pin on an image: tap the picture; tap again to move the pin.
+		function showPin(def, chosen) {
+			draft = Array.isArray(chosen) && chosen.length === 2 ? [...chosen] : null;
+			const wrap = el('div', 'pin-wrap');
+			const img = el('img');
+			img.src = def.image;
+			img.alt = def.alt || def.prompt || '';
+			img.draggable = false;
+			img.addEventListener('error', () => pollStatus('The picture couldn’t be loaded.', 'bad'));
+			const dot = el('span', 'dot');
+			dot.hidden = true;
+			wrap.append(img, dot);
+			wrap.addEventListener('click', e => {
+				const at = tapped(e, img);
+				if (!at) return;
+				draft = at.map(f => Math.round(1000 * f));
+				refresh();
+			});
+			$('poll-body').append(wrap);
+			$('poll-submit').hidden = false;
+		}
+
+		// Whether a draft is a whole answer.
+		function complete(def, d) {
+			if (d === null || d === undefined) return false;
+			switch (def.kind) {
+			case 'choice': return d.size > 0;
+			case 'number': return Number.isInteger(d);
+			case 'ranking': return d.length === def.options.length;
+			case 'points': return d.reduce((a, b) => a + b, 0) === def.total;
+			case 'pin': return Array.isArray(d);
+			default: return d.every(v => v !== null);		// scale, premises, self-others, grid
+			}
+		}
+
+		// Whether the draft can be sent; and what shows it (a ranking's numbers,
+		// the pressed option, the points left, the dots).
+		function refresh() {
+			if (!poll || poll.kind === 'words') return;
+			const body = $('poll-body');
+			if (poll.kind === 'ranking' && draft) {
+				body.querySelectorAll('.poll-rank button').forEach(b => {
+					const at = draft.indexOf(Number(b.dataset.value));
+					pressed(b, at >= 0);
+					b.querySelector('.badge').textContent = at >= 0 ? at + 1 : '';
+				});
+			}
+			if (poll.kind === 'self-others' && draft) body.querySelectorAll('.poll-options .opt').forEach(b => pressed(b, Number(b.dataset.value) === draft[0]));
+			if (poll.kind === 'points' && draft) {
+				const sum = draft.reduce((a, b) => a + b, 0), u = pointsUnit(poll);
+				$('points-left').textContent = sum === poll.total ? `They add up to ${withUnit(poll.total, u)}.`
+					: sum < poll.total ? `${withUnit(poll.total - sum, u)} still to give.` : `${withUnit(sum - poll.total, u)} too many.`;
+				$('points-left').className = 'points-left' + (sum === poll.total ? ' ok' : '');
+				$('points-fix').hidden = sum === poll.total;
+			}
+			if (poll.kind === 'grid' && draft) {
+				body.querySelectorAll('.grid-square').forEach(sq => {
+					const p = draft[Number(sq.dataset.item)], dot = sq.querySelector('.dot');
+					dot.hidden = !p;
+					if (p) {
+						dot.style.left = (100 * (p[0] - poll.min) / (poll.max - poll.min)) + '%';
+						dot.style.top = (100 - 100 * (p[1] - poll.min) / (poll.max - poll.min)) + '%';
+					}
+				});
+			}
+			if (poll.kind === 'pin') {
+				const dot = body.querySelector('.pin-wrap .dot');
+				if (dot) {
+					dot.hidden = !draft;
+					if (draft) { dot.style.left = (draft[0] / 10) + '%'; dot.style.top = (draft[1] / 10) + '%'; }
+				}
+			}
+			$('poll-submit').disabled = !complete(poll, draft);
+		}
+
+		// The draft as an answer.
+		const draftAnswer = () => poll.kind === 'choice' ? [...draft].sort((a, b) => a - b)
+			: Array.isArray(draft) ? JSON.parse(JSON.stringify(draft)) : draft;
+
+		// At most one answer a second reaches the relay: a quicker one waits.
+		let lastSent = 0, pending = null;
+		function answer(value) {
+			if (!poll || !socket || !socket.connected) return;
+			const wait = lastSent + 1100 - Date.now();
+			clearTimeout(pending);
+			if (wait > 0) { pending = setTimeout(() => answer(value), wait); return; }
+			lastSent = Date.now();
+			const id = poll.id;
+			pollStatus('Sending…');
+			socket.timeout(10000).emit('poll-answer', { channel: config.channel, code: $('code').value, id, value, voter }, (err, res) => {
+				if (err) return pollStatus('No reply.  Please try again.', 'bad');
+				if (res && res.ok) {
+					remember(id, value);
+					if (poll && poll.id === id) {
+						if (!Array.isArray(value)) $('poll-options').querySelectorAll('button').forEach(b => pressed(b, Number(b.dataset.value) === value));
+						pollStatus(poll.kind !== 'words' ? 'Thanks!  You can change your answer until the poll closes.'
+							: !value.length ? 'Your words are withdrawn.'
+							: poll.moderated ? 'Thanks!  Your words appear once the presenter has approved them.'
+							: res.held ? (res.held === value.length ? 'Thanks!  Your words are waiting for the presenter’s approval.' : 'Thanks!  Some of your words are waiting for the presenter’s approval.')
+							: 'Thanks!  Your words are on the screen.', 'ok');
+					}
+				}
+				else pollStatus(POLL_MESSAGES[res && res.reason] || 'Your answer could not be sent.', 'bad');
+			});
+		}
+
+		$('poll-submit').addEventListener('click', () => { if (poll && complete(poll, draft)) answer(draftAnswer()); });
+		$('poll-range').addEventListener('input', () => { $('poll-value').textContent = withUnit($('poll-range').value, poll && poll.unit); });
+		$('poll-send').addEventListener('click', () => answer(Number($('poll-range').value)));
+		$('to-question').addEventListener('click', () => { asking = true; showPoll(poll); $('text').focus(); });
+
+		// ---- The board: questions the presenter has shared from the tablet,
+		// for everyone to vote on (one vote each, which can be taken back).
+		// Shown with the question form.  This phone remembers which it voted for.
+		let boardItems = [];
+		let myVotes = new Set();
+		try { myVotes = new Set(JSON.parse(localStorage.getItem('ask-board-votes') || '[]')); } catch (e) { /* storage blocked */ }
+		const saveVotes = () => { try { localStorage.setItem('ask-board-votes', JSON.stringify([...myVotes])); } catch (e) { /* storage blocked */ } };
+		function showBoard(b) {
+			if (!b || !Array.isArray(b.items)) return;
+			boardItems = b.items;
+			$('board-list').replaceChildren(...boardItems.map(item => {
+				const li = el('li');
+				const mine = myVotes.has(item.id);
+				const vote = button('', () => voteFor(item.id, !myVotes.has(item.id)), 'vote');
+				vote.append(el('span', 'arrow', '▲'), el('span', 'n', String(item.votes)));
+				pressed(vote, mine);
+				vote.setAttribute('aria-label', (mine ? 'Take back your vote for: ' : 'Vote for: ') + item.text);
+				li.append(vote, el('p', 'text', item.text));		// text nodes: never innerHTML
+				return li;
+			}));
+			showBoardSection();
+		}
+		function showBoardSection() { $('board').hidden = !boardItems.length || (!!poll && !asking); }
+		function voteFor(id, up) {
+			if (!socket || !socket.connected) return;
+			socket.timeout(10000).emit('board-vote', { channel: config.channel, code: $('code').value, id, voter, up }, (err, res) => {
+				if (err || !res || !res.ok) return;
+				if (up) myVotes.add(id); else myVotes.delete(id);
+				saveVotes();
+				const item = boardItems.find(i => i.id === id);
+				if (item) item.votes = res.votes;
+				showBoard({ items: boardItems });
+			});
+		}
+
+		// ---- Reactions and "Lost?", when the deck offers them: a bar at the
+		// foot of the page.  A reaction floats up the laptop's screen; "Lost?"
+		// goes only to the presenter's tablet, as a count, and lapses after a
+		// couple of minutes.
+		let paceTimer = null;
+		function showAudience(a) {
+			if (!a || !Array.isArray(a.reactions)) return;
+			$('reactions').replaceChildren(...a.reactions.map(emoji => {
+				const b = button(emoji, () => react(b, emoji), 'react');
+				b.setAttribute('aria-label', 'React with ' + emoji);
+				return b;
+			}));
+			$('reactions').hidden = !a.reactions.length;
+			$('pace').hidden = !a.pace;
+			$('live').hidden = !a.reactions.length && !a.pace;
+			document.body.classList.toggle('live-on', !$('live').hidden);
+		}
+		function react(b, emoji) {
+			if (!socket || !socket.connected || b.disabled) return;
+			socket.emit('reaction', { channel: config.channel, code: $('code').value, emoji });
+			b.classList.remove('sent');
+			void b.offsetWidth;		// restart the animation
+			b.classList.add('sent');
+			document.querySelectorAll('#reactions button').forEach(x => { x.disabled = true; });
+			setTimeout(() => document.querySelectorAll('#reactions button').forEach(x => { x.disabled = false; }), 900);
+		}
+		function setLost(lost) {
+			pressed($('pace'), lost);
+			$('pace').textContent = lost ? 'Told the presenter · tap when you’re back on track' : 'Lost?  Tell the presenter, privately';
+		}
+		$('pace').addEventListener('click', () => {
+			if (!socket || !socket.connected) return;
+			const lost = $('pace').getAttribute('aria-pressed') !== 'true';
+			socket.timeout(10000).emit('pace', { channel: config.channel, code: $('code').value, voter, lost }, (err, res) => {
+				if (err || !res || !res.ok) return;
+				setLost(lost);
+				clearTimeout(paceTimer);
+				if (lost) paceTimer = setTimeout(() => setLost(false), res.window || 120000);
+			});
+		});
+		setLost(false);
+
+		// ---- The relay
 
 		const script = document.createElement('script');
 		script.src = config.relay.replace(/\/+$/, '') + '/socket.io/socket.io.js';
 		script.onload = () => {
 			socket = io(config.relay.replace(/\/+$/, ''));
-			socket.on('connect', () => { status(''); ready(); });
+			socket.on('connect', () => { status(''); ready(); join(); });
+			socket.on('poll', showPoll);
+			socket.on('board', showBoard);
+			socket.on('audience', showAudience);
 			socket.on('disconnect', () => { status('Connection lost; reconnecting…', 'bad'); ready(); });
 			ready();
 		};
@@ -136,7 +924,11 @@
 					$('text').value = '';
 					try { sessionStorage.setItem('ask-code', sentCode); } catch (e2) { /* storage blocked */ }
 				}
-				else status(MESSAGES[res && res.reason] || 'Your question could not be sent.', 'bad');
+				else {
+					status(MESSAGES[res && res.reason] || 'Your question could not be sent.', 'bad');
+					// e.g. a QR code from another day: let the student type today's.
+					if (res && res.reason === 'code') { $('code-field').hidden = false; $('code').select(); }
+				}
 				ready();
 			});
 		});

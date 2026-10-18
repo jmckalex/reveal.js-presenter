@@ -277,6 +277,28 @@ points, ranking). Only phones that answered both count. The relay matches
 phones by aliases it makes afresh each time it starts, so it must not restart
 between the two.
 
+**Versions** (relay protocol only, for now). A single-pick choice poll may come
+in two to four versions, each `{ name, prompt, story }`: an experiment in which
+each phone sees one version and the versions' answers are compared (Knobe's
+two stories of the chairman). The relay deals the versions out in turn as each
+phone is first sent the poll, keeps which phone has which with the poll, and
+sends a phone only its own `prompt` and `story` (up to 1200 characters). A
+phone answers with an option's index; the laptop's counts and aliases carry
+`version × options + index`, its tally also says how many phones were `dealt`
+each version, and the tablet's counts are labelled "name: option". A phone
+should send its `voter` id with `audience-join`, so that a reload brings back
+the same version. `client/ask.html` and `presenter-polls.js` don't build or
+show versions yet; the PH226 course pages (`ask.js`, `master.js`) do.
+
+**Reset** (relay protocol only, for now). The tablet may send `reset` with
+the questions key, to start the lecture again from a clean state (after a
+rehearsal, say): the relay forgets that channel's polls, their answers and
+the versions it dealt, the board and "Lost?", and opens again, empty, any
+poll open at the time. Each poll the phones are sent carries a `round`, new
+whenever the relay has forgotten the poll's answers, so a phone remembers
+its answer by poll and round and never shows one the relay no longer has.
+`client/presenter.html` has no Reset button yet; the PH226 iPad page does.
+
 ### The pill, the board, reactions and "Lost?"
 
 - **The pill** says "Answer on your phone · 3 answers" while a poll is open.

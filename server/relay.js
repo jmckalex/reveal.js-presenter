@@ -143,10 +143,36 @@ function cleanName(name) {
  * as in a moderated poll.  The tablet also hears how many have answered the
  * latest poll ('poll-count').  Nothing is written anywhere or logged, and a
  * poll is forgotten POLL_TTL_MS after it was last opened.
+ *
+ * A single-pick choice poll may come in versions (2 to MAX_VERSIONS), each
+ * with a name, its own prompt and a story to read first: an experiment, in
+ * which each phone sees one version and the versions' answers are compared
+ * (Knobe's two stories of the chairman, say).  The relay deals the versions
+ * out in turn as each phone is first sent the poll (those already joined in
+ * the order they joined, then the rest as they join), so that each version
+ * is seen by as many phones as the others, give or take one; and it keeps
+ * which phone has which, with the poll, so that a reload brings back the
+ * same one.  A phone is sent only its own version, without the versions'
+ * names.  It answers with an option's index; the relay keeps that as
+ * version * options + index, which is what the laptop's counts and aliases
+ * carry (its tally also says how many phones were dealt each version), and
+ * the tablet's counts are labelled "name: option".
+ *
+ * Each poll has a round, a random token made when the relay starts keeping
+ * it, which goes to the phones with the poll: an answer a phone remembers
+ * under another round is one the relay has forgotten (by a restart, its
+ * definition changing, POLL_TTL_MS, or a reset).  The tablet may reset the
+ * channel ('reset'): its polls, board and pace signal are forgotten, as if
+ * the relay had restarted for that channel alone, with questions still open.
+ * A poll open at the time opens again empty, in a new round (its versions
+ * dealt afresh), and the laptop and the tablet are told ('reset'), to clear
+ * their charts and counts.
  */
 const POLL_TTL_MS = 3 * 3600 * 1000;
 const MAX_POLLS = 50;						// per channel; the oldest go first
 const MAX_OPTIONS = 12;						// in a choice poll
+const MAX_VERSIONS = 4;						// versions of a choice poll, each phone dealt one
+const MAX_STORY_LENGTH = 1200;				// characters in a version's story
 const MAX_RANKED = 10;						// options in a ranking poll
 const MAX_STATEMENTS = 12;					// in a scale or premises poll
 const MAX_SCALE_RANGE = 10;					// max - min of a scale
@@ -191,6 +217,14 @@ function pollDefinition(p) {
 		const options = texts(p.options, 2, MAX_OPTIONS, 80);
 		const picks = p.picks ?? 1;
 		if (!options || !isInt(picks, 1, options.length)) return null;
+		if (p.versions !== undefined) {
+			// Versions (see above): single-pick only; each has a name and a
+			// story, and may have a prompt of its own.
+			if (picks !== 1 || !Array.isArray(p.versions) || p.versions.length < 2 || p.versions.length > MAX_VERSIONS) return null;
+			const versions = p.versions.map(v => v && typeof v === 'object'
+				? { name: oneLine(v.name, 40), prompt: oneLine(v.prompt, 300), story: oneLine(v.story, MAX_STORY_LENGTH) } : null);
+			return versions.every(v => v && v.name && v.story) ? { ...base, options, versions } : null;
+		}
 		return picks === 1 ? { ...base, options } : { ...base, options, picks };
 	}
 	case 'number': {
@@ -329,6 +363,41 @@ function answerTo(def, value) {
 
 const aliasOf = (channel, voter) => sha256(ALIAS_SALT + ':' + channel + ':' + voter).slice(0, 12);
 
+// A phone's key, as its answers are kept: its own id, sent when it joined,
+// or else its connection's.
+const voterOf = socket => socket.data.voter || 's:' + socket.id;
+
+// A poll in versions (see above): the version dealt to a phone, dealing it
+// the next in turn if it has none yet; and the poll as that phone is sent it.
+function versionOf(poll, voter) {
+	const n = poll.def.versions.length;
+	if (poll.dealt.has(voter)) return poll.dealt.get(voter);
+	if (poll.dealt.size >= MAX_VOTERS) return poll.next++ % n;		// a flood: dealt, not kept
+	poll.dealt.set(voter, poll.next++ % n);
+	return poll.dealt.get(voter);
+}
+function pollFor(poll, voter) {
+	const def = poll.def;
+	if (!def.versions) return { ...def, round: poll.round };
+	const v = def.versions[versionOf(poll, voter)];
+	return { id: def.id, kind: def.kind, prompt: v.prompt || def.prompt, instructions: def.instructions, options: def.options, story: v.story, round: poll.round };
+}
+
+// A poll the relay starts keeping, in a round of its own (see above).
+const newPoll = (def, key) => ({ def, key, round: crypto.randomBytes(6).toString('hex'), answers: new Map(), words: new Map(), dealt: new Map(), next: 0 });
+
+// Send the poll now open (or null) to the channel's phones: the same to
+// all, or, for a poll in versions, each its own, dealt in the order the
+// phones joined.
+function sendPoll(channel, poll) {
+	if (!poll) return io.to('audience:' + channel).emit('poll', null);
+	if (!poll.def.versions) return io.to('audience:' + channel).emit('poll', pollFor(poll));
+	for (const id of io.sockets.adapter.rooms.get('audience:' + channel) || []) {
+		const socket = io.sockets.sockets.get(id);
+		if (socket) socket.emit('poll', pollFor(poll, voterOf(socket)));
+	}
+}
+
 // A word cloud's words, with how many phones gave each, and each one's status:
 // 'pending' (waiting for the tablet), 'shown' or 'hidden'; and whether the
 // word filter caught it.
@@ -348,12 +417,16 @@ function tallyOf(channel, poll) {
 	const def = poll.def;
 	const tally = { id: def.id, total: poll.answers.size };
 	if (counted(def)) {
-		const counts = new Array(def.kind === 'choice' ? def.options.length : def.max - def.min + 1).fill(0);
+		const counts = new Array(def.kind === 'choice' ? def.options.length * (def.versions ? def.versions.length : 1) : def.max - def.min + 1).fill(0);
 		for (const a of poll.answers.values()) {
 			if (Array.isArray(a)) a.forEach(k => counts[k]++);
 			else counts[def.kind === 'choice' ? a : a - def.min]++;
 		}
 		tally.counts = counts;
+	}
+	if (def.versions) {
+		tally.dealt = def.versions.map(() => 0);
+		for (const v of poll.dealt.values()) tally.dealt[v]++;
 	}
 	if (def.kind === 'words') tally.words = wordsOf(poll).filter(w => w.status === 'shown').map(({ word, n }) => ({ word, n }));
 	else tally.answers = [...poll.answers].map(([voter, a]) => [aliasOf(channel, voter), a]);
@@ -373,8 +446,8 @@ function countOf(channel, poll) {
 	const def = poll.def;
 	const m = { id: def.id, kind: def.kind, prompt: def.prompt, open: polls.get(channel)?.current === def.id, total: poll.answers.size };
 	if (def.kind === 'choice') {
-		m.options = def.options;
-		m.counts = def.options.map(() => 0);
+		m.options = def.versions ? def.versions.flatMap(v => def.options.map(o => v.name + ': ' + o)) : def.options;
+		m.counts = m.options.map(() => 0);
 		for (const a of poll.answers.values()) (Array.isArray(a) ? a : [a]).forEach(k => m.counts[k]++);
 	}
 	if (def.kind === 'number' && poll.answers.size) {
@@ -555,7 +628,7 @@ io.on('connection', socket => {
 		const key = JSON.stringify(def);
 		let poll = state.byId.get(def.id);
 		if (!poll || poll.key !== key) {
-			poll = { def, key, answers: new Map(), words: new Map() };
+			poll = newPoll(def, key);
 			state.byId.delete(def.id);
 			state.byId.set(def.id, poll);
 			if (state.byId.size > MAX_POLLS) state.byId.delete(state.byId.keys().next().value);
@@ -564,7 +637,7 @@ io.on('connection', socket => {
 		socket.join('results:' + channel);
 		if (state.current !== def.id) {
 			state.current = def.id;
-			io.to('audience:' + channel).emit('poll', def);
+			sendPoll(channel, poll);
 		}
 		state.last = def.id;
 		if (def.kind === 'words') {
@@ -596,17 +669,20 @@ io.on('connection', socket => {
 		ack(poll ? { ok: true, tally: tallyOf(data.socketId, poll) } : { ok: false, reason: 'unknown' });
 	});
 
-	// A phone joins the audience with the day's code; the ack carries the poll
-	// open now, if any, the board, and the audience options (reactions, pace).
+	// A phone joins the audience with the day's code, and its id (voter, as
+	// with its answers: a poll in versions deals by it); the ack carries the
+	// poll open now, if any, the board, and the audience options (reactions,
+	// pace).
 	socket.on('audience-join', (data, ack) => {
 		if (typeof ack !== 'function') return;
 		const entry = data && typeof data.channel === 'string' && open.get(data.channel);
 		if (!entry || entry.expires < Date.now()) return ack({ ok: false, reason: 'closed' });
 		if (data.code !== entry.code) return ack({ ok: false, reason: 'code' });
+		if (typeof data.voter === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(data.voter)) socket.data.voter = 'v:' + data.voter;
 		socket.join('audience:' + data.channel);
 		const state = polls.get(data.channel);
 		const poll = state && state.current !== null ? state.byId.get(state.current) : null;
-		ack({ ok: true, poll: poll ? poll.def : null, board: boardMessage(data.channel), audience: entry.audience || NO_AUDIENCE });
+		ack({ ok: true, poll: poll ? pollFor(poll, voterOf(socket)) : null, board: boardMessage(data.channel), audience: entry.audience || NO_AUDIENCE });
 		if (entry.audience?.pace) sendPace(data.channel);		// the tablet's "out of how many"
 	});
 
@@ -640,6 +716,10 @@ io.on('connection', socket => {
 			else poll.answers.delete(voter);
 			sendWords(data.channel, poll);
 		}
+		// A poll in versions keeps the answer as version * options + index, by
+		// the version this phone was dealt (under its id, or else, from a page
+		// that joined without one, its connection's).
+		else if (poll.def.versions) poll.answers.set(voter, versionOf(poll, poll.dealt.has(voter) ? voter : voterOf(socket)) * poll.def.options.length + value);
 		else poll.answers.set(voter, value);
 		sendTally(data.channel, poll);
 		sendCount(data.channel, poll);
@@ -698,6 +778,42 @@ io.on('connection', socket => {
 		if (data.all === true && board) board.items.clear();
 		else if (!board || typeof data.id !== 'string' || !board.items.delete(data.id)) return reply({ ok: false, reason: 'unknown' });
 		sendBoard(data.channel);
+		reply({ ok: true });
+	});
+
+	// The tablet starts the channel afresh (see the polls' comment): every
+	// poll, the board and the pace signal forgotten, a poll open now opened
+	// again empty, in a new round.  Pending throttled sends are cancelled, so
+	// that nothing from before arrives after.
+	socket.on('reset', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const refused = tablet(data);
+		if (refused) return reply({ ok: false, reason: refused });
+		const channel = data.channel;
+		const cancel = (holder, names) => { if (holder) names.forEach(n => clearTimeout(holder[n + 'Timer'])); };
+		const state = polls.get(channel);
+		for (const poll of state ? state.byId.values() : []) cancel(poll, ['tally', 'words', 'count']);
+		const current = state && state.current !== null ? state.byId.get(state.current) : null;
+		const fresh = current && newPoll(current.def, current.key);
+		if (fresh) {
+			fresh.expires = Date.now() + POLL_TTL_MS;
+			const id = fresh.def.id;
+			polls.set(channel, { current: id, words: fresh.def.kind === 'words' ? id : null, last: id, byId: new Map([[id, fresh]]) });
+		}
+		else polls.delete(channel);
+		cancel(boards.get(channel), ['board']);
+		boards.delete(channel);
+		cancel(pace.get(channel), ['pace']);
+		pace.delete(channel);
+		io.to('results:' + channel).to('q:' + channel).emit('reset');
+		io.to('audience:' + channel).to('q:' + channel).to('results:' + channel).emit('board', boardMessage(channel));
+		io.to('q:' + channel).emit('pace', paceMessage(channel));
+		if (fresh) {
+			sendPoll(channel, fresh);
+			io.to('results:' + channel).emit('poll-tally', tallyOf(channel, fresh));
+			io.to('q:' + channel).emit('poll-count', countOf(channel, fresh));
+			if (fresh.def.kind === 'words') io.to('q:' + channel).emit('poll-words', wordsMessage(channel, fresh));
+		}
 		reply({ ok: true });
 	});
 

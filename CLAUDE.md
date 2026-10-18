@@ -68,6 +68,7 @@ answer (`value`) a phone sends:
 | `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value against the kind, the rate limits |
 | `'poll-moderate'` | the tablet, with an ack | `{ channel, key, id, word, status }` or `{ channel, key, id, all: true, status }` | the questions key; `status` is `'shown'` or `'hidden'`; `all` sets every pending word |
 | `'board-share'`, `'board-remove'` | the tablet, with an ack | `{ channel, key, text }`; `{ channel, key, id }` or `{ channel, key, all: true }` | the questions key; the text as for a question |
+| `'reset'` | the tablet, with an ack | `{ channel, key }` | the questions key; see "Rounds and reset" below |
 | `'board-vote'` | a phone, with an ack | `{ channel, code, id, voter, up }` | the code; one vote per `voter` per question; `up: false` takes it back |
 | `'reaction'` | a phone, ack optional | `{ channel, code, emoji }` | the code; `emoji` one of the deck's reactions; one per 0.8 s per connection |
 | `'pace'` | a phone, ack optional | `{ channel, code, voter, lost }` | the code; that the deck has the pace signal on |
@@ -96,6 +97,19 @@ and gains answers: `{ id, kind, prompt, open, total }`, plus `options` and
 `counts` for a choice poll, or `median`, `mean` and `unit` for a number poll.
 For a number poll wider than 1000 values the laptop's tally has no `counts`
 (the `answers` carry everything).
+
+**Rounds and reset.** The `'poll'` a phone is sent carries `round`, a random
+token made whenever the relay starts keeping a poll (first opened, its
+definition changed, lapsed, after a restart or a reset): a phone should
+remember its answers by `id` and `round`, so that it never shows as given an
+answer the relay has forgotten. `'reset'` from the tablet forgets the
+channel's polls (their answers and the versions dealt), its board and its
+pace signal, as a restart would for that channel alone; questions stay
+open. A poll open at the time opens again, empty, in a new round, sent to
+the phones (versions dealt afresh, in the room's order). Pending throttled
+sends are cancelled, and the laptop (`'results:'` room) and the tablet are
+sent `'reset'` (no payload) before the empty board, the pace count (0) and
+the open poll's empty tally and count.
 
 **The board** (upvoted questions): a question still reaches only the tablet;
 the tablet may *share* one (`'board-share'`), which the relay then keeps,
@@ -324,7 +338,12 @@ For audience questions:
     first to the tablet (proving the key) and reach the laptop only once
     shown. (The user chose this so that a laptop reload loses nothing,
     results can appear on a later slide, and free text is never projected
-    unseen.)
+    unseen.) A poll in versions also keeps which version each phone was
+    dealt, with the poll and for as long, so that a reload brings back the
+    same one; a phone is sent only its own version, never the others or
+    their names. The tablet's `'reset'` forgets all of it for its channel
+    at once (for a rehearsal, say); it only ever removes state, never keeps
+    more.
 12b. **The board keeps only what the tablet shares.** Questions still go
     only to the tablet; the lecturer chooses which to share for upvoting, and
     the relay keeps those, without names, for three hours. Never put an

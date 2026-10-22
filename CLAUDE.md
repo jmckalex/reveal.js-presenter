@@ -24,7 +24,9 @@ The protocol is reveal/multiplex's. The master emits
 `socketId` is the channel id, `state` is `Reveal.getState()` and `deck` is the
 deck's path without `?master`. If `sha256(secret) === socketId`, the relay
 re-emits the message, minus the secret, under the event name `socketId`.
-`server/relay.js` adds one event: a client may emit `'presenter-hello'` with
+It passes on anything else the message carries untouched (the PH226
+laptop adds `slides`, `chalkboard`, `chalkboardGrid` and `screen`, what its
+screen shows besides, for the tablet's copies). `server/relay.js` adds one event: a client may emit `'presenter-hello'` with
 the channel id to get the last message replayed.
 
 Audience questions add three events, all to `server/relay.js` only:
@@ -63,7 +65,7 @@ answer (`value`) a phone sends:
 |---|---|---|---|
 | `'poll-open'` | the laptop, with an ack | `{ socketId, secret, poll }` | the secret and the poll; the ack carries the tally |
 | `'poll-close'` | the laptop | `{ socketId, secret }` | the secret |
-| `'poll-results'` | the laptop, with an ack | `{ socketId, secret, id }` | the secret; the ack carries that poll's tally |
+| `'poll-results'` | the laptop, with an ack; or the tablet | `{ socketId, secret, id }`; `{ channel, key, id }` | the secret, or the questions key; the ack carries that poll's tally (the laptop then also gets its updates; the tablet has them already) |
 | `'audience-join'` | a phone, with an ack | `{ channel, code }` | the day's code (questions must be open); the ack carries the open poll or `null` |
 | `'poll-answer'` | a phone, with an ack | `{ channel, code, id, value, voter }` | the code, that `id` is open, the value against the kind, the rate limits |
 | `'poll-moderate'` | the tablet, with an ack | `{ channel, key, id, word, status }` or `{ channel, key, id, all: true, status }` | the questions key; `status` is `'shown'` or `'hidden'`; `all` sets every pending word |
@@ -78,7 +80,8 @@ answer (`value`) a phone sends:
 | `'pace'` | a phone, ack optional | `{ channel, code, voter, lost }` | the code; that the deck has the pace signal on |
 
 Phones in the audience get `'poll'` with the poll (no tally) when one opens
-and `null` when it closes. The laptop gets `'poll-tally'` as answers arrive,
+and `null` when it closes. The laptop, and the tablets in the questions room
+(whose copies of the deck draw the laptop's charts), get `'poll-tally'` as answers arrive,
 at most every 300 ms: `{ id, total }`, plus `counts` (per option, or per value
 from `min`) for choice and number polls, plus `answers`, a list of
 `[alias, answer]`, for every kind but words, or `words`, a list of
@@ -110,7 +113,7 @@ million: the chalkboard scrolls down without end), `erase` (`mode`, `board`,
 `x`, `y`), `clear`, `scroll` (mode 1 only, `board`, `y` ≥ 0: how far down
 the chalkboard is shown), `theme` (`chalkboard` or `whiteboard`), `grid` (`true` or `false`: shown or hidden), `showChalkboard`, `closeChalkboard`, and the
 steps `next`, `prev`, `left`, `right`, `up`, `down` (those four as
-reveal's own controls), `overview` (reveal's toggle) and `question` (the deck's question button, `#question-qr-button`). The relay rebuilds each from those fields alone (`driverOp`;
+reveal's own controls), `overview` (reveal's toggle), `question` (the deck's question button, `#question-qr-button`) and `goto` (`h`, `v`: a slide chosen in the overview, which closes it). The relay rebuilds each from those fields alone (`driverOp`;
 anything else, the plugin's `init` among it, is dropped) and sends
 `{ from, seq, at, ops }` as `'driver'`, with an ack, to the room
 `'master:' + channel`, which a connection joins by sending a position with

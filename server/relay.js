@@ -136,7 +136,9 @@ function cleanName(name) {
  * that proved the secret) is sent counts for choice polls, and number polls
  * of up to MAX_COUNTED_RANGE values, and, for every kind but words, each
  * answer under an alias: the same for a phone across the channel's polls, so
- * that answers can be compared, but not its id.  A word cloud's words are
+ * that answers can be compared, but not its id.  So is the tablet that holds
+ * the questions key (the same 'poll-tally', and 'poll-results' with the key),
+ * whose copies of the deck draw the laptop's charts too.  A word cloud's words are
  * free text, so they go first to the tablet that holds the questions key
  * ('poll-words'), which shows or hides each ('poll-moderate'); the laptop is
  * sent only the shown words and their counts.  A poll can opt out of that
@@ -227,6 +229,8 @@ function driverOp(op) {
 	const board = index(op.board) ? op.board : 0;
 	switch (op.type) {
 	case 'next': case 'prev': case 'left': case 'right': case 'up': case 'down': case 'overview': case 'question': return { type: op.type };
+	case 'goto': return Number.isInteger(op.h) && op.h >= 0 && op.h < 100000 && Number.isInteger(op.v) && op.v >= 0 && op.v < 100000
+		? { type: 'goto', h: op.h, v: op.v } : null;
 	case 'showChalkboard': return { type: 'showChalkboard', mode: 1, board };
 	case 'closeChalkboard': return { type: 'closeChalkboard', mode: 0, board };
 	}
@@ -571,7 +575,7 @@ function throttled(poll, name, send) {
 		send();
 	}, wait);
 }
-const sendTally = (channel, poll) => throttled(poll, 'tally', () => io.to('results:' + channel).emit('poll-tally', tallyOf(channel, poll)));
+const sendTally = (channel, poll) => throttled(poll, 'tally', () => io.to('results:' + channel).to('q:' + channel).emit('poll-tally', tallyOf(channel, poll)));
 const sendWords = (channel, poll) => throttled(poll, 'words', () => io.to('q:' + channel).emit('poll-words', wordsMessage(channel, poll)));
 const sendCount = (channel, poll) => throttled(poll, 'count', () => io.to('q:' + channel).emit('poll-count', countOf(channel, poll)));
 
@@ -757,13 +761,23 @@ io.on('connection', socket => {
 	});
 
 	// The laptop asks for a poll's tally: results on a later slide, say.  It
-	// then also receives that poll's updates.
+	// then also receives that poll's updates.  So may the tablet, with the
+	// questions key ({ channel, key, id }), which has the updates already.
 	socket.on('poll-results', (data, ack) => {
 		if (typeof ack !== 'function') return;
-		if (!authenticated(data)) return ack({ ok: false, reason: 'secret' });
-		socket.join('results:' + data.socketId);
-		const poll = polls.get(data.socketId)?.byId.get(data.id);
-		ack(poll ? { ok: true, tally: tallyOf(data.socketId, poll) } : { ok: false, reason: 'unknown' });
+		let channel;
+		if (authenticated(data)) {
+			channel = data.socketId;
+			socket.join('results:' + channel);
+		}
+		else if (data && typeof data.key === 'string') {
+			const refused = tablet(data);
+			if (refused) return ack({ ok: false, reason: refused });
+			channel = data.channel;
+		}
+		else return ack({ ok: false, reason: 'secret' });
+		const poll = typeof data.id === 'string' ? polls.get(channel)?.byId.get(data.id) : null;
+		ack(poll ? { ok: true, tally: tallyOf(channel, poll) } : { ok: false, reason: 'unknown' });
 	});
 
 	// A phone joins the audience with the day's code, and its id (voter, as
@@ -907,7 +921,7 @@ io.on('connection', socket => {
 		io.to('q:' + channel).emit('pace', paceMessage(channel));
 		if (fresh) {
 			sendPoll(channel, fresh);
-			io.to('results:' + channel).emit('poll-tally', tallyOf(channel, fresh));
+			io.to('results:' + channel).to('q:' + channel).emit('poll-tally', tallyOf(channel, fresh));
 			io.to('q:' + channel).emit('poll-count', countOf(channel, fresh));
 			if (fresh.def.kind === 'words') io.to('q:' + channel).emit('poll-words', wordsMessage(channel, fresh));
 		}

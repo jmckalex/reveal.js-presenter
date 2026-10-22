@@ -3,7 +3,9 @@
 // secret with a position), only to the questions key's room, each thing drawn
 // rebuilt from what the plugin's messages may say, a slide's drawings rebuilt
 // event by event, the tablet's asking passed to the laptop only with the key,
-// and the limits.  Also the tablet's 'question' step.  Starts a local relay;
+// and the limits.  Also what the tablet's copies of the deck need to draw
+// the laptop's charts (the tallies, sent to it too, and asked for with the
+// key), and its 'question' and 'goto' steps.  Starts a local relay;
 // RELAY_URL tests a running one on a throwaway channel.
 //   node tools/ink-test.js
 const puppeteer = require('puppeteer');
@@ -37,7 +39,8 @@ const check = (ok, what, detail) => { if (!ok) failures++; console.log(`${ok ? '
     const laptop = await connect(), tablet = await connect(), phone = await connect(), stranger = await connect();
     const got = {};
     for (const [name, s] of Object.entries({ laptop, tablet, phone, stranger })) {
-      got[name] = { ink: [], slide: [], want: [] };
+      got[name] = { ink: [], slide: [], want: [], tally: [] };
+      s.on('poll-tally', d => got[name].tally.push(d));
       s.on('ink', d => got[name].ink.push(d));
       s.on('ink-slide', d => got[name].slide.push(d));
       s.on('ink-want', d => got[name].want.push(d));
@@ -142,6 +145,23 @@ const check = (ok, what, detail) => { if (!ok) failures++; console.log(`${ok ? '
     laptop.on('driver', (b, ack) => { batch = b; ack({ ok: true, dropped: 0 }); });
     r.question = await ask(tablet, 'driver', { channel, key, from: '0123456789abcdef', seq: 1, at, ops: [{ type: 'question' }] });
     r.questionOps = batch && batch.ops;
+    // A slide chosen in the overview, and ones that may not be.
+    r.goto = await ask(tablet, 'driver', { channel, key, from: '0123456789abcdef', seq: 2, at, ops: [{ type: 'goto', h: 5, v: 1, evil: 1 }] });
+    r.gotoOps = batch && batch.ops;
+    await ask(tablet, 'driver', { channel, key, from: '0123456789abcdef', seq: 3, at, ops: [{ type: 'goto', h: -1, v: 0 }, { type: 'goto', h: 2, v: 'x' }, { type: 'goto', h: 1e6, v: 0 }, { type: 'next' }] });
+    r.badGotoOps = batch && batch.ops;
+
+    // The tallies: to the laptop and the tablet as answers arrive, and to the
+    // tablet when it asks with the key.
+    await sleep(1100);
+    r.pollOpen = await ask(laptop, 'poll-open', { socketId: channel, secret, poll: { id: 'p1', kind: 'choice', options: ['A', 'B'], prompt: 'Which?' } });
+    r.answer = await ask(phone, 'poll-answer', { channel, code: '1234', id: 'p1', value: 1, voter: 'v-1' });
+    await sleep(600);
+    r.tallies = { laptop: got.laptop.tally.slice(-1)[0], tablet: got.tablet.tally.slice(-1)[0], phone: got.phone.tally.length, stranger: got.stranger.tally.length };
+    r.asked = await ask(tablet, 'poll-results', { channel, key, id: 'p1' });
+    r.askedWrong = await ask(tablet, 'poll-results', { channel, key: 'WRONG', id: 'p1' });
+    r.askedNothing = await ask(stranger, 'poll-results', { channel, id: 'p1' });
+    r.askedUnknown = await ask(tablet, 'poll-results', { channel, key, id: 'nope' });
     return r;
   }, RELAY, secret, channel, key, keyHash);
 
@@ -173,7 +193,16 @@ const check = (ok, what, detail) => { if (!ok) failures++; console.log(`${ok ? '
   check(out.slideOthers.phone === 0 && out.slideOthers.stranger === 0, 'and to no one else', out.slideOthers);
   check(out.slideRefused === 0, 'nothing from another connection, without the page’s id, a part out of range, too many parts, a malformed slide or times, or too many events', out.slideRefused);
   check(JSON.stringify(out.slideWithStep) === JSON.stringify({ h: 3, v: 0, f: 2 }), 'a slide’s step (a plugin keeping drawings by step) passes', out.slideWithStep);
-  check(out.question && out.question.ok && JSON.stringify(out.questionOps) === JSON.stringify([{ type: 'question' }]), 'the tablet’s question step reaches the laptop', out);
+  check(out.question && out.question.ok && JSON.stringify(out.questionOps) === JSON.stringify([{ type: 'question' }]), 'the tablet’s question step reaches the laptop', out.questionOps);
+  check(out.goto && out.goto.ok && JSON.stringify(out.gotoOps) === JSON.stringify([{ type: 'goto', h: 5, v: 1 }]), 'a slide chosen in the overview reaches the laptop, rebuilt', out.gotoOps);
+  check(JSON.stringify(out.badGotoOps) === JSON.stringify([{ type: 'next' }]), 'and none outside the deck’s indices', out.badGotoOps);
+  const t = out.tallies;
+  check(out.pollOpen && out.pollOpen.ok && out.answer && out.answer.ok && t.laptop && t.laptop.total === 1 && JSON.stringify(t.tablet) === JSON.stringify(t.laptop),
+    'a poll’s tally goes to the tablet too, the same as to the laptop', t);
+  check(t.phone === 0 && t.stranger === 0, 'and to no phone, or anyone else', t);
+  check(out.asked && out.asked.ok && JSON.stringify(out.asked.tally) === JSON.stringify(t.laptop), 'the tablet may ask for a poll’s tally with the key', out.asked);
+  check(out.askedWrong && out.askedWrong.reason === 'key' && out.askedNothing && out.askedNothing.reason === 'secret' && out.askedUnknown && out.askedUnknown.reason === 'unknown',
+    'not with a wrong key or none; an unknown poll is unknown', [out.askedWrong, out.askedNothing, out.askedUnknown]);
 
   await browser.close();
   if (relay) relay.kill();

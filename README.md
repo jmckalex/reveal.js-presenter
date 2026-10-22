@@ -312,7 +312,9 @@ each thing drawn on its deck as it is drawn, and, when the tablet asks
 (`ink-want`, with the questions key), `ink-slide`, the slide's drawings so
 far, in parts; the relay checks them as it does Drive's and passes them to
 the questions room alone. The PH226 iPad page uses them so that its current
-slide shows what the projector does.
+slide shows what the projector does. For the same reason the tablet gets
+each poll's tally as the laptop does (and may ask for one with the key), so
+that its copies of the deck can draw the laptop's charts.
 
 ### The pill, the board, reactions and "Lost?"
 

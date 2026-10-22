@@ -307,6 +307,13 @@ checks against a short list and passes to the laptop's copy alone, telling
 the tablet whether it drew them. The PH226 iPad page's Drive button uses it,
 to write on the projector with an Apple Pencil.
 
+**Ink** (relay protocol only, for now). The other way: the laptop sends `ink`,
+each thing drawn on its deck as it is drawn, and, when the tablet asks
+(`ink-want`, with the questions key), `ink-slide`, the slide's drawings so
+far, in parts; the relay checks them as it does Drive's and passes them to
+the questions room alone. The PH226 iPad page uses them so that its current
+slide shows what the projector does.
+
 ### The pill, the board, reactions and "Lost?"
 
 - **The pill** says "Answer on your phone · 3 answers" while a poll is open.
@@ -423,6 +430,7 @@ node tools/e2e-test.js           # the presenter view and questions
 node tools/polls-test.js         # polls, through the pages
 node tools/relay-test.js         # the relay's later events, at the socket level
 node tools/driver-test.js        # the tablet driving the laptop's deck, at the socket level
+node tools/ink-test.js           # the laptop's ink, to the tablet, at the socket level
 ```
 
 Each test starts the relay and, but for `relay-test.js`, a local web server.

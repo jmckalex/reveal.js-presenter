@@ -18,8 +18,9 @@
  *    wakes up or reconnects catches up at once instead of at the laptop's next
  *    heartbeat.
  *
- * It also carries audience questions and polls, and lets the presenter's
- * tablet drive the laptop's deck; see the rest of this file.
+ * It also carries audience questions and polls, lets the presenter's tablet
+ * drive the laptop's deck, and sends the tablet what is drawn on the laptop's;
+ * see the rest of this file.
  *
  * Environment: PORT (default 1948), HOST (default 127.0.0.1, i.e. behind a
  * reverse proxy), ALLOWED_ORIGINS (comma-separated; default: any origin, which
@@ -225,7 +226,7 @@ function driverOp(op) {
 	const index = v => Number.isInteger(v) && v >= 0 && v <= 99;
 	const board = index(op.board) ? op.board : 0;
 	switch (op.type) {
-	case 'next': case 'prev': case 'left': case 'right': case 'up': case 'down': case 'overview': return { type: op.type };
+	case 'next': case 'prev': case 'left': case 'right': case 'up': case 'down': case 'overview': case 'question': return { type: op.type };
 	case 'showChalkboard': return { type: 'showChalkboard', mode: 1, board };
 	case 'closeChalkboard': return { type: 'closeChalkboard', mode: 0, board };
 	}
@@ -239,6 +240,54 @@ function driverOp(op) {
 	case 'scroll': return mode === 1 && coord(op.y) && op.y >= 0 ? { type: 'scroll', mode, board, y: op.y } : null;
 	case 'theme': return op.theme === 'chalkboard' || op.theme === 'whiteboard' ? { type: 'theme', mode, board, theme: op.theme } : null;
 	case 'grid': return typeof op.grid === 'boolean' ? { type: 'grid', mode, board, grid: op.grid } : null;
+	}
+	return null;
+}
+
+/*
+ * Ink, from the laptop to the tablet: what is drawn on the laptop's deck, so
+ * that the tablet's copy shows what the laptop's screen does.  'ink' is each
+ * thing as it is drawn (a batch of the chalkboard plugin's messages, each
+ * numbered, as driverOp has them, and its reset of a slide), and 'ink-slide'
+ * a slide's drawings so far, in parts, when the tablet asks ('ink-want', with
+ * the questions key).  Both carry the laptop page's id (run), since its
+ * numbers start again when it reloads.  Only from the laptop's connections
+ * (those in 'master:' + channel), and only to the questions key's room.
+ * Nothing is kept.
+ */
+const MAX_INK_OPS = 200;					// things drawn, in a batch
+const MAX_INK_PART = 400;					// events, in a part of a slide's drawings
+const MAX_INK_PARTS = 500;
+const INK_BATCHES_PER_SECOND = 40;			// per connection
+const INK_PARTS_PER_SECOND = 200;			// per connection: a slide's parts come at once
+const INK_WANTS_PER_SECOND = 5;				// per connection
+const INK_KINDS = new Set(['draw', 'erase', 'clear', 'scroll', 'theme', 'grid', 'showChalkboard', 'closeChalkboard', 'resetSlide']);
+const inkRun = v => typeof v === 'string' && /^[0-9a-f]{8,32}$/.test(v) ? v : null;
+const inkStep = v => Number.isInteger(v) && v >= -1 && v < 100000;
+const inkAt = at => at && typeof at === 'object' && inkStep(at.h) && inkStep(at.v) && inkStep(at.f) ? { h: at.h, v: at.v, f: at.f } : null;
+
+// One thing drawn, numbered, and marked as a tablet's page's if it came from one.
+function inkOp(op) {
+	if (!op || !INK_KINDS.has(op.type) || !Number.isInteger(op.n) || op.n < 1) return null;
+	const ink = op.type === 'resetSlide' ? { type: 'resetSlide', mode: op.mode === 1 ? 1 : 0, board: 0 } : driverOp(op);
+	if (!ink) return null;
+	ink.n = op.n;
+	if (inkRun(op.from)) ink.from = op.from;
+	return ink;
+}
+
+// One event of a slide's drawings, as the chalkboard plugin keeps them.
+function inkEvent(e) {
+	if (!e || typeof e !== 'object' || typeof e.time !== 'number' || !Number.isFinite(e.time) || e.time < 0 || e.time > 1e13) return null;
+	const coord = v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_DRIVER_COORD;
+	const index = v => Number.isInteger(v) && v >= 0 && v <= 99;
+	const time = e.time, board = index(e.board) ? e.board : 0;
+	switch (e.type) {
+	case 'draw': return index(e.color) && [e.x1, e.y1, e.x2, e.y2].every(coord)
+		? { type: 'draw', color: e.color, x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, time, board } : null;
+	case 'erase': return coord(e.x) && coord(e.y) ? { type: 'erase', x: e.x, y: e.y, time, board } : null;
+	case 'scroll': return coord(e.y) && e.y >= 0 ? { type: 'scroll', y: e.y, time, board } : null;
+	case 'clear': case 'selectboard': case 'open': case 'close': return { type: e.type, time, board };
 	}
 	return null;
 }
@@ -894,6 +943,35 @@ io.on('connection', socket => {
 			const why = list.find(r => r && typeof r.reason === 'string');
 			reply({ ok: false, reason: why ? oneLine(why.reason, 20) : 'timeout' });
 		});
+	});
+
+	// The laptop's ink, on to the tablet; the tablet's asking for a slide's.
+	const perSecond = () => { let second = 0, count = 0; return limit => { const now = Date.now(); if (now - second >= 1000) { second = now; count = 0; } return ++count <= limit; }; };
+	const inkBatch = perSecond(), inkPart = perSecond(), inkWant = perSecond();
+	const laptopOf = data => data && typeof data.socketId === 'string' && socket.rooms.has('master:' + data.socketId) ? data.socketId : null;
+	socket.on('ink', data => {
+		const channel = laptopOf(data), at = data && inkAt(data.at), run = data && inkRun(data.run);
+		if (!channel || !at || !run || !Array.isArray(data.ops) || !data.ops.length || data.ops.length > MAX_INK_OPS || !inkBatch(INK_BATCHES_PER_SECOND)) return;
+		const ops = data.ops.map(inkOp).filter(Boolean);
+		if (ops.length) io.to('q:' + channel).emit('ink', { run, at, ops });
+	});
+	socket.on('ink-slide', data => {
+		const channel = laptopOf(data), at = data && inkAt(data.at), run = data && inkRun(data.run);
+		if (!channel || !at || !run || !inkPart(INK_PARTS_PER_SECOND)) return;
+		const { part, parts, n, slide, durations } = data;
+		if (!Number.isInteger(parts) || parts < 1 || parts > MAX_INK_PARTS || !Number.isInteger(part) || part < 0 || part >= parts) return;
+		if (!Number.isInteger(n) || n < 0 || !slide || !inkStep(slide.h) || !inkStep(slide.v) || (slide.f !== undefined && !inkStep(slide.f))) return;
+		if (!Array.isArray(durations) || durations.length !== 2 || !durations.every(d => typeof d === 'number' && Number.isFinite(d) && d >= 0 && d < 1e13)) return;
+		const notes = Array.isArray(data.notes) ? data.notes : [], board = Array.isArray(data.board) ? data.board : [];
+		if (notes.length + board.length > MAX_INK_PART) return;
+		io.to('q:' + channel).emit('ink-slide', {
+			run, at, n, part, parts, slide: slide.f === undefined ? { h: slide.h, v: slide.v } : { h: slide.h, v: slide.v, f: slide.f },
+			mode: data.mode === 1 ? 1 : 0, durations, notes: notes.map(inkEvent).filter(Boolean), board: board.map(inkEvent).filter(Boolean)
+		});
+	});
+	socket.on('ink-want', data => {
+		if (tablet(data) || !inkWant(INK_WANTS_PER_SECOND)) return;
+		io.to('master:' + data.channel).emit('ink-want', { at: inkAt(data.at) });
 	});
 
 	// A phone votes for a question on the board (up: true), or takes its vote

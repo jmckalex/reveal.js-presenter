@@ -70,6 +70,9 @@ answer (`value`) a phone sends:
 | `'board-share'`, `'board-remove'` | the tablet, with an ack | `{ channel, key, text }`; `{ channel, key, id }` or `{ channel, key, all: true }` | the questions key; the text as for a question |
 | `'reset'` | the tablet, with an ack | `{ channel, key }` | the questions key; see "Rounds and reset" below |
 | `'driver'` | the tablet, with an ack | `{ channel, key, from, seq, at: { h, v, f }, ops }` | the questions key; at most 400 `ops`, 40 batches a second; see "Driving from the tablet" below |
+| `'ink'` | the laptop | `{ socketId, run, at: { h, v, f }, ops }` | a connection in `'master:' + channel`; at most 200 `ops`, 40 batches a second; see "Ink, to the tablet" below |
+| `'ink-slide'` | the laptop | `{ socketId, run, at, n, slide: { h, v[, f] }, part, parts, mode, durations, notes, board }` | likewise; at most 400 events a part, 500 parts, 200 parts a second |
+| `'ink-want'` | the tablet | `{ channel, key, at }` | the questions key; five a second |
 | `'board-vote'` | a phone, with an ack | `{ channel, code, id, voter, up }` | the code; one vote per `voter` per question; `up: false` takes it back |
 | `'reaction'` | a phone, ack optional | `{ channel, code, emoji }` | the code; `emoji` one of the deck's reactions; one per 0.8 s per connection |
 | `'pace'` | a phone, ack optional | `{ channel, code, voter, lost }` | the code; that the deck has the pace signal on |
@@ -107,7 +110,7 @@ million: the chalkboard scrolls down without end), `erase` (`mode`, `board`,
 `x`, `y`), `clear`, `scroll` (mode 1 only, `board`, `y` ≥ 0: how far down
 the chalkboard is shown), `theme` (`chalkboard` or `whiteboard`), `grid` (`true` or `false`: shown or hidden), `showChalkboard`, `closeChalkboard`, and the
 steps `next`, `prev`, `left`, `right`, `up`, `down` (those four as
-reveal's own controls) and `overview` (reveal's toggle). The relay rebuilds each from those fields alone (`driverOp`;
+reveal's own controls), `overview` (reveal's toggle) and `question` (the deck's question button, `#question-qr-button`). The relay rebuilds each from those fields alone (`driverOp`;
 anything else, the plugin's `init` among it, is dropped) and sends
 `{ from, seq, at, ops }` as `'driver'`, with an ack, to the room
 `'master:' + channel`, which a connection joins by sending a position with
@@ -118,6 +121,28 @@ slide `at` (the step, with a plugin that keeps writing for each step; else
 counts it `dropped`), ignores a `seq` it has
 already applied from that `from`, and hands each op to the plugin as one of
 its own `'received'` messages. Nothing is kept.
+
+**Ink, to the tablet.** The other way, so that the tablet's copy of the
+slide shows what the laptop's screen does. `'ink'` is each thing drawn on
+the laptop's deck as the plugin announces it (its `'broadcast'` messages,
+the kinds `driverOp` takes but the steps, and `resetSlide`), and what a
+tablet's Drive drew there, numbered (`n`, from 1 in each load of the laptop's
+page, which has its own `run`: 8–32 hex digits), with `from`, the tablet
+page's id, on what a tablet drew; `at` is the laptop's position. The relay
+rebuilds each op as `driverOp` does (`inkOp`) and sends `{ run, at, ops }`
+to `'q:' + channel`, the room of the tablets holding the questions key. When
+a tablet asks (`'ink-want'`, which goes to `'master:' + channel` as
+`{ at }`), and whenever the laptop's page loads or reconnects, the laptop
+sends `'ink-slide'`: its slide's drawings so far, the events as the plugin
+keeps them (`draw` with `color`, `x1`, `y1`, `x2`, `y2`; `erase` with `x`,
+`y`; `scroll` with `y`; `clear`, `selectboard`, `open`, `close`; each with
+`time` and `board`), the pen's (`notes`) and the chalkboard's (`board`), in
+parts of 400 events (a message may be 64 KB at most), with the last number
+sent (`n`), whether the chalkboard is open (`mode`) and each canvas's
+`durations`. The relay rebuilds each event (`inkEvent`) and sends the part on
+to `'q:' + channel` without `socketId`. Only a connection in
+`'master:' + channel` may send either: one that proved the secret with a
+position. Nothing is kept.
 
 **Rounds and reset.** The `'poll'` a phone is sent carries `round`, a random
 token made whenever the relay starts keeping a poll (first opened, its

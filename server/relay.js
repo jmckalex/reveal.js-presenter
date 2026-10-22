@@ -18,7 +18,8 @@
  *    wakes up or reconnects catches up at once instead of at the laptop's next
  *    heartbeat.
  *
- * It also carries audience questions and polls; see the rest of this file.
+ * It also carries audience questions and polls, and lets the presenter's
+ * tablet drive the laptop's deck; see the rest of this file.
  *
  * Environment: PORT (default 1948), HOST (default 127.0.0.1, i.e. behind a
  * reverse proxy), ALLOWED_ORIGINS (comma-separated; default: any origin, which
@@ -195,6 +196,52 @@ const TALLY_EVERY_MS = 300;					// at most this often to the laptop, and to the 
 
 const polls = new Map();	// channel id -> { current: poll id or null, words: the latest word cloud's id, byId: Map(poll id -> poll) }
 const ALIAS_SALT = crypto.randomBytes(16).toString('hex');	// a fresh one each run: aliases can't be traced to phones
+
+/*
+ * Driving from the tablet.
+ *
+ * The tablet may drive the laptop's deck ('driver', with the questions key):
+ * strokes for the deck's chalkboard plugin (its pen, on the slide, and its
+ * chalkboard, which scrolls) and steps back and forward.  Each batch is
+ * rebuilt from what is allowed (driverOp: a list of kinds, their numbers
+ * checked) and sent to the laptop's connections alone: those that proved the
+ * secret with a position ('master:' + channel).  The tablet is told whether
+ * one of them applied it, or why not: 'no-laptop', 'timeout', or the
+ * laptop's own reason.  Nothing is kept.
+ */
+const MAX_DRIVER_OPS = 400;					// operations in one batch
+const DRIVER_ACK_MS = 3000;					// the laptop's reply, at most this long
+const DRIVER_BATCHES_PER_SECOND = 40;		// per connection
+// In the deck's own units (1024 by 576, say): the chalkboard scrolls down
+// without end, so its writing may be far below the first screen.
+const MAX_DRIVER_COORD = 1000000;
+
+// One operation of a 'driver' batch, as the chalkboard plugin's own messages
+// have it, or null if it is not one that may be sent.  The plugin's 'init',
+// which would replace every drawing, is not among them.
+function driverOp(op) {
+	if (!op || typeof op !== 'object') return null;
+	const coord = v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= MAX_DRIVER_COORD;
+	const index = v => Number.isInteger(v) && v >= 0 && v <= 99;
+	const board = index(op.board) ? op.board : 0;
+	switch (op.type) {
+	case 'next': case 'prev': case 'left': case 'right': case 'up': case 'down': case 'overview': return { type: op.type };
+	case 'showChalkboard': return { type: 'showChalkboard', mode: 1, board };
+	case 'closeChalkboard': return { type: 'closeChalkboard', mode: 0, board };
+	}
+	const mode = op.mode;
+	if (mode !== 0 && mode !== 1) return null;
+	switch (op.type) {
+	case 'draw': return index(op.color) && [op.fromX, op.fromY, op.toX, op.toY].every(coord)
+		? { type: 'draw', mode, board, color: op.color, fromX: op.fromX, fromY: op.fromY, toX: op.toX, toY: op.toY } : null;
+	case 'erase': return coord(op.x) && coord(op.y) ? { type: 'erase', mode, board, x: op.x, y: op.y } : null;
+	case 'clear': return { type: 'clear', mode, board };
+	case 'scroll': return mode === 1 && coord(op.y) && op.y >= 0 ? { type: 'scroll', mode, board, y: op.y } : null;
+	case 'theme': return op.theme === 'chalkboard' || op.theme === 'whiteboard' ? { type: 'theme', mode, board, theme: op.theme } : null;
+	case 'grid': return typeof op.grid === 'boolean' ? { type: 'grid', mode, board, grid: op.grid } : null;
+	}
+	return null;
+}
 
 const oneLine = (value, max) => typeof value === 'string'
 	? [...value.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim()].slice(0, max).join('') : '';
@@ -549,6 +596,7 @@ io.on('connection', socket => {
 		if (!data || typeof data.socketId !== 'string' || typeof data.secret !== 'string' || !data.secret) return;
 		if (sha256(data.secret) !== data.socketId) return;
 		const message = Object.assign({}, data, { secret: null });
+		socket.join('master:' + data.socketId);		// the laptop: where the tablet's 'driver' batches go
 		latest.delete(data.socketId);
 		latest.set(data.socketId, message);
 		if (latest.size > MAX_CHANNELS) latest.delete(latest.keys().next().value);
@@ -815,6 +863,37 @@ io.on('connection', socket => {
 			if (fresh.def.kind === 'words') io.to('q:' + channel).emit('poll-words', wordsMessage(channel, fresh));
 		}
 		reply({ ok: true });
+	});
+
+	// The tablet drives the laptop's deck (see driverOp).  A batch carries the
+	// step it was drawn on (at: the position the laptop last sent, which the
+	// laptop checks), an id for the tablet's page (from) and a number (seq),
+	// by which the laptop ignores a batch sent again.
+	let driverSecond = 0, driverBatches = 0;
+	socket.on('driver', (data, ack) => {
+		const reply = typeof ack === 'function' ? ack : () => {};
+		const refused = tablet(data);
+		if (refused) return reply({ ok: false, reason: refused });
+		const now = Date.now();
+		if (now - driverSecond >= 1000) { driverSecond = now; driverBatches = 0; }
+		if (++driverBatches > DRIVER_BATCHES_PER_SECOND) return reply({ ok: false, reason: 'busy' });
+		const at = data.at;
+		const step = v => Number.isInteger(v) && v >= -1 && v < 100000;
+		if (!at || !step(at.h) || !step(at.v) || !step(at.f) || typeof data.from !== 'string' || !/^[0-9a-f]{8,32}$/.test(data.from)
+			|| !Number.isInteger(data.seq) || data.seq < 1 || !Array.isArray(data.ops) || !data.ops.length || data.ops.length > MAX_DRIVER_OPS)
+			return reply({ ok: false, reason: 'invalid' });
+		const ops = data.ops.map(driverOp).filter(Boolean);
+		if (!ops.length) return reply({ ok: false, reason: 'invalid' });
+		const room = 'master:' + data.channel;
+		if (!io.sockets.adapter.rooms.get(room)?.size) return reply({ ok: false, reason: 'no-laptop' });
+		const batch = { from: data.from, seq: data.seq, at: { h: at.h, v: at.v, f: at.f }, ops };
+		io.to(room).timeout(DRIVER_ACK_MS).emit('driver', batch, (err, replies) => {
+			const list = Array.isArray(replies) ? replies : [];
+			const done = list.find(r => r && r.ok === true);
+			if (done) return reply({ ok: true, dropped: Number.isInteger(done.dropped) ? done.dropped : 0 });
+			const why = list.find(r => r && typeof r.reason === 'string');
+			reply({ ok: false, reason: why ? oneLine(why.reason, 20) : 'timeout' });
+		});
 	});
 
 	// A phone votes for a question on the board (up: true), or takes its vote

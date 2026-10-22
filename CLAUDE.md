@@ -69,6 +69,7 @@ answer (`value`) a phone sends:
 | `'poll-moderate'` | the tablet, with an ack | `{ channel, key, id, word, status }` or `{ channel, key, id, all: true, status }` | the questions key; `status` is `'shown'` or `'hidden'`; `all` sets every pending word |
 | `'board-share'`, `'board-remove'` | the tablet, with an ack | `{ channel, key, text }`; `{ channel, key, id }` or `{ channel, key, all: true }` | the questions key; the text as for a question |
 | `'reset'` | the tablet, with an ack | `{ channel, key }` | the questions key; see "Rounds and reset" below |
+| `'driver'` | the tablet, with an ack | `{ channel, key, from, seq, at: { h, v, f }, ops }` | the questions key; at most 400 `ops`, 40 batches a second; see "Driving from the tablet" below |
 | `'board-vote'` | a phone, with an ack | `{ channel, code, id, voter, up }` | the code; one vote per `voter` per question; `up: false` takes it back |
 | `'reaction'` | a phone, ack optional | `{ channel, code, emoji }` | the code; `emoji` one of the deck's reactions; one per 0.8 s per connection |
 | `'pace'` | a phone, ack optional | `{ channel, code, voter, lost }` | the code; that the deck has the pace signal on |
@@ -97,6 +98,26 @@ and gains answers: `{ id, kind, prompt, open, total }`, plus `options` and
 `counts` for a choice poll, or `median`, `mean` and `unit` for a number poll.
 For a number poll wider than 1000 values the laptop's tally has no `counts`
 (the `answers` carry everything).
+
+**Driving from the tablet.** `'driver'` carries strokes for the deck's
+chalkboard plugin (rajgoel's: its pen on the slide, mode 0, and its
+chalkboard, mode 1) and steps: each op is one of `draw` (`mode`, `board`,
+`color`, `fromX`, `fromY`, `toX`, `toY`, in the deck's own units, up to a
+million: the chalkboard scrolls down without end), `erase` (`mode`, `board`,
+`x`, `y`), `clear`, `scroll` (mode 1 only, `board`, `y` ≥ 0: how far down
+the chalkboard is shown), `theme` (`chalkboard` or `whiteboard`), `grid` (`true` or `false`: shown or hidden), `showChalkboard`, `closeChalkboard`, and the
+steps `next`, `prev`, `left`, `right`, `up`, `down` (those four as
+reveal's own controls) and `overview` (reveal's toggle). The relay rebuilds each from those fields alone (`driverOp`;
+anything else, the plugin's `init` among it, is dropped) and sends
+`{ from, seq, at, ops }` as `'driver'`, with an ack, to the room
+`'master:' + channel`, which a connection joins by sending a position with
+the secret. The tablet's ack is the laptop's own (`{ ok: true, dropped }`),
+or `no-laptop`, or `timeout` after 3 s; with two laptops on a channel, the
+first that answers. The laptop applies a batch only if it is still on the
+slide `at` (the step, with a plugin that keeps writing for each step; else
+counts it `dropped`), ignores a `seq` it has
+already applied from that `from`, and hands each op to the plugin as one of
+its own `'received'` messages. Nothing is kept.
 
 **Rounds and reset.** The `'poll'` a phone is sent carries `round`, a random
 token made whenever the relay starts keeping a poll (first opened, its

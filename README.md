@@ -299,6 +299,14 @@ whenever the relay has forgotten the poll's answers, so a phone remembers
 its answer by poll and round and never shows one the relay no longer has.
 `client/presenter.html` has no Reset button yet; the PH226 iPad page does.
 
+**Driving** (relay protocol only, for now). The tablet may send `driver`
+with the questions key: strokes for the deck's chalkboard plugin (its pen,
+on the slide, and its chalkboard, which it may scroll) and steps back and
+forward or in any of reveal's four directions, which the relay
+checks against a short list and passes to the laptop's copy alone, telling
+the tablet whether it drew them. The PH226 iPad page's Drive button uses it,
+to write on the projector with an Apple Pencil.
+
 ### The pill, the board, reactions and "Lost?"
 
 - **The pill** says "Answer on your phone · 3 answers" while a poll is open.
@@ -414,6 +422,7 @@ npm --prefix server install      # socket.io, for the relay
 node tools/e2e-test.js           # the presenter view and questions
 node tools/polls-test.js         # polls, through the pages
 node tools/relay-test.js         # the relay's later events, at the socket level
+node tools/driver-test.js        # the tablet driving the laptop's deck, at the socket level
 ```
 
 Each test starts the relay and, but for `relay-test.js`, a local web server.

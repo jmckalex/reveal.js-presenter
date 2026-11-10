@@ -2,9 +2,10 @@
  * reveal.js-presenter — the laptop's poll charts, the answer pill, the board
  * of shared questions and floating reactions (see presenter-polls.js).
  *
- * Loaded by presenter-master.js only with ?master, so every other copy of a
- * deck is as written: there a .poll-results is an empty box that takes no
- * room, and a .poll is always empty.
+ * Loaded by presenter-master.js only with ?master, and in the tablet's own
+ * copies of the deck (?presenter), which mirror the laptop's screen; every
+ * other copy of a deck is as written: there a .poll-results is an empty box
+ * that takes no room, and a .poll is always empty.
  *
  * The colours follow the reveal.js theme (its link, text and background
  * colours).  To restyle, set these on .reveal in the deck's own CSS:
@@ -12,7 +13,14 @@
  *   --poll-text        text on charts and on the pill
  *   --poll-card        an overlay's card, and the pill
  *   --poll-highlight   the right answer, a game's winner, marks on a chart
- *   --poll-colour-1 … --poll-colour-8   the palette: word clouds, flows, grids
+ *   --poll-colour-1 … --poll-colour-8   the palette: word clouds, flows
+ *   --poll-grid-colour-1 … -8, --poll-grid-ink-1 … -8   a grid poll's items, and
+ *                      the ink of each one's number on its disc
+ *
+ * A grid's items are told apart by colour alone on its square, where any two
+ * may land side by side, so they take hues much further apart than the
+ * palette's: the first six are the six of these eight that stay most distinct
+ * from one another, in colour-blind vision too.
  */
 .reveal {
 	--poll-accent: var(--r-link-color, #2a76dd);
@@ -29,6 +37,22 @@
 	--poll-colour-6: #16878c;
 	--poll-colour-7: #9c6b3f;
 	--poll-colour-8: #c2185b;
+	--poll-grid-colour-1: #2a78d6;
+	--poll-grid-colour-2: #e34948;
+	--poll-grid-colour-3: #1baf7a;
+	--poll-grid-colour-4: #eda100;
+	--poll-grid-colour-5: #e87ba4;
+	--poll-grid-colour-6: #008300;
+	--poll-grid-colour-7: #6250d6;
+	--poll-grid-colour-8: #eb6834;
+	--poll-grid-ink-1: #fff;
+	--poll-grid-ink-2: #fff;
+	--poll-grid-ink-3: #fff;
+	--poll-grid-ink-4: #0b0b0b;
+	--poll-grid-ink-5: #fff;
+	--poll-grid-ink-6: #fff;
+	--poll-grid-ink-7: #fff;
+	--poll-grid-ink-8: #fff;
 }
 
 /* While a poll is open, the pill at the foot of the screen (showPollStates()). */
@@ -130,6 +154,62 @@
 	width: calc(var(--share) * 100%);
 	min-width: 2px;
 	transition: width 400ms ease;
+}
+/* A choice poll in versions: a column per version, its share above it, and
+   a dashed mark for a published figure (see drawVersions()). */
+.reveal .poll-results.versions .chart {
+	display: flex;
+	justify-content: center;
+	gap: 3.5em;
+}
+.reveal .poll-results.versions .version {
+	display: grid;
+	grid-template-rows: auto minmax(0, 1fr) auto auto;
+	justify-items: center;
+	width: 9em;
+}
+.reveal .poll-results.versions .share {
+	font-size: 1.6em;
+	line-height: 1.1;
+	color: var(--poll-accent);
+	font-variant-numeric: tabular-nums;
+}
+.reveal .poll-results.versions .column {
+	position: relative;
+	width: 4.2em;
+	background: var(--poll-faint);
+	border-radius: 2px;
+	border-bottom: 1px solid var(--poll-accent);
+}
+.reveal .poll-results.versions .column .bar {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: calc(var(--share, 0) * 100%);
+	transition: height 400ms ease;
+}
+.reveal .poll-results.versions .reference {
+	position: absolute;
+	left: -0.6em;
+	right: -0.6em;
+	bottom: calc(var(--at) * 100%);
+	border-top: 2px dashed var(--poll-highlight);
+}
+.reveal .poll-results.versions .reference span {
+	position: absolute;
+	left: calc(100% + 0.35em);
+	top: -0.7em;
+	white-space: nowrap;
+	color: var(--poll-highlight);
+	font-size: 0.85em;
+}
+.reveal .poll-results.versions .name {
+	margin-top: 0.25em;
+	font-weight: 600;
+}
+.reveal .poll-results.versions .count {
+	font-size: 0.85em;
 }
 /* Number: a column per value, or per range of values.  A grid, with the
    labels in a row of their own, so that the bars share one axis even when
@@ -593,20 +673,35 @@
 .reveal .poll-results .grid2 .frame { fill: var(--poll-faint); stroke: var(--poll-muted); stroke-width: 0.4; }
 .reveal .poll-results .grid2 .mid { stroke: var(--poll-muted); stroke-width: 0.25; stroke-dasharray: 1.5 1.5; }
 .reveal .poll-results .grid2 .axis { font-size: 4.2px; fill: var(--poll-muted); }
-.reveal .poll-results .grid2 .one { opacity: 0.35; }
+.reveal .poll-results .grid2 .one { opacity: 0.7; stroke: #fff; stroke-width: 0.25; }
 .reveal .poll-results .grid2 .mean { stroke: #fff; stroke-width: 0.6; }
-.reveal .poll-results .grid2 .num { font-size: 4px; font-weight: 700; fill: #fff; }
+.reveal .poll-results .grid2 .num { font-size: 4px; font-weight: 700; }
 .reveal .poll-results .grid2 .legend {
 	margin: 0;
-	padding-left: 1.6em;
+	padding: 0;
+	list-style: none;
 	max-width: 38%;
 }
 .reveal .poll-results .grid2 .legend li {
+	display: flex;
+	align-items: baseline;		/* each disc's number on the words' baseline (centred, the discs sat low) */
+	gap: 0.45em;
 	margin: 0.2em 0;
 	line-height: 1.2;
 }
-.reveal .poll-results .grid2 .legend li::marker {
-	color: var(--colour);
+/* The legend's numbers are discs like the chart's, not numbers in the item's
+   colour, which would not read in the paler ones. */
+.reveal .poll-results .grid2 .legend .key {
+	flex: none;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.35em;
+	height: 1.35em;
+	border-radius: 50%;
+	background: var(--colour);
+	color: var(--ink);
+	font-size: 0.8em;
 	font-weight: 700;
 }
 
@@ -637,6 +732,7 @@
 
 /* The board of shared questions (see showBoard()). */
 .reveal .qa-board {
+	display: block;		/* a <qa-board>, unlike a div, is inline */
 	font-size: 0.6em;
 	text-align: left;
 }

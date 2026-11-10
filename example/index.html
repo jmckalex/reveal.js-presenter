@@ -1,12 +1,14 @@
 <!doctype html>
 <!--
-	A small deck for trying reveal.js-presenter, and the one tools/e2e-test.js
-	and tools/polls-test.js drive.  The only presenter-specific lines are the two
-	<script> tags marked below, and the empty elements that the laptop's copy
-	(?master=<secret>) fills in: the question code, the QR code, the polls
-	(.poll), their charts (.poll-results) and the board (.qa-board).  Opened
-	without ?master, the deck is an ordinary reveal.js deck, and those elements
-	stay empty.
+	A small deck for trying reveal.js-presenter, and the one the tests in tools/
+	drive.  The only presenter-specific lines are the two <script> tags marked
+	below, the chalkboard plugin (client/vendor/chalkboard, for Drive and for
+	the laptop's writing on the tablet), and the empty elements that the
+	laptop's copy (?master=<secret>), and the tablet's copies of it, fill in:
+	the question code, the QR code, the polls (.poll, or <live-poll>), their
+	charts (.poll-results, or <poll-results>) and the board (.qa-board).
+	Opened any other way, the deck is an ordinary reveal.js deck, and those
+	elements stay empty.
 -->
 <html lang="en">
 <head>
@@ -15,6 +17,10 @@
 	<title>reveal.js-presenter demo</title>
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.css">
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/theme/white.css">
+	<!-- The chalkboard (client/vendor/chalkboard: rajgoel's plugin, changed for
+	     the presenter view's Drive and ink), whose buttons use Font Awesome. -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+	<link rel="stylesheet" href="../client/vendor/chalkboard/style.css">
 </head>
 <body>
 	<div class="reveal">
@@ -94,7 +100,9 @@
 
 			<section id="poll-words">
 				<h2>A word cloud</h2>
-				<div class="poll" data-poll="one-word" data-kind="words" data-entries="2"
+				<!-- data-moderate="on": every word waits for the tablet.  Without it,
+				     words show at once, but for any the relay's word filter catches. -->
+				<div class="poll" data-poll="one-word" data-kind="words" data-entries="2" data-moderate="on"
 					data-prompt="One or two words for this talk so far"></div>
 				<div class="poll-results" data-poll="one-word" style="height: 400px;"></div>
 				<aside class="notes">
@@ -135,6 +143,32 @@
 				<aside class="notes">Click to show the answers, the average, the target and the winners.</aside>
 			</section>
 
+			<!--
+				The same polls can be written as custom elements, with their
+				options as plain attributes; the laptop's copy turns them into
+				the markup above.  Always write the closing tag.
+			-->
+			<section id="poll-picks">
+				<h2>Several answers</h2>
+				<live-poll name="reading" picks="all" options="A novel|A newspaper|A blog|None of them"
+					exclusive="None of them" prompt="What have you read this week?"></live-poll>
+				<poll-results poll="reading" style="height: 300px;"></poll-results>
+				<aside class="notes">“None of them” stands alone: ticking it unticks the rest.</aside>
+			</section>
+
+			<section id="poll-versions">
+				<h2>Two stories</h2>
+				<!-- Each phone is dealt one version: its story, above its question. -->
+				<live-poll name="chairman" options="Yes|No" instructions="Read the story, then answer.">
+					<template data-version="Harm" data-prompt="Did the chairman harm the environment intentionally?">The vice-president of a company went to the chairman of the board and said, “We are thinking of starting a new programme. It will help us increase profits, but it will also harm the environment.” The chairman answered, “I don’t care at all about harming the environment. I just want to make as much profit as I can. Let’s start the new programme.” They started the new programme. Sure enough, the environment was harmed.</template>
+					<template data-version="Help" data-prompt="Did the chairman help the environment intentionally?">The vice-president of a company went to the chairman of the board and said, “We are thinking of starting a new programme. It will help us increase profits, and it will also help the environment.” The chairman answered, “I don’t care at all about helping the environment. I just want to make as much profit as I can. Let’s start the new programme.” They started the new programme. Sure enough, the environment was helped.</template>
+				</live-poll>
+				<p>Half the room read one story, half the other.</p>
+				<poll-results poll="chairman" share="Yes" reference="82|23" reference-label="Knobe"
+					class="fragment" style="height: 320px;"></poll-results>
+				<aside class="notes">Knobe (2003): 82% said harm, 23% said help.</aside>
+			</section>
+
 			<section id="board-slide">
 				<h2>Questions from the room</h2>
 				<p>Shared from the tablet; the audience votes on their phones.</p>
@@ -149,13 +183,22 @@
 
 	<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/plugin/notes/notes.js"></script>
+	<script src="../client/vendor/chalkboard/plugin.js"></script>
 
-	<!-- reveal.js-presenter: inert unless the URL has ?master=<secret>. -->
+	<!-- reveal.js-presenter: inert unless the URL has ?master=<secret> (or, in
+	     the tablet's own copies, ?presenter). -->
 	<script src="../client/presenter-config.js"></script>
 	<script src="../client/presenter-master.js"></script>
 
 	<script>
-		Reveal.initialize({ hash: true, plugins: [RevealNotes] });
+		Reveal.initialize({
+			hash: true,
+			plugins: [RevealNotes, RevealChalkboard],
+			// transition: how long after arriving on a slide the plugin clears it
+			// and draws its drawings again (800 ms by default).  Writing sent from
+			// the tablet in that time waits for it, so keep it short.
+			chalkboard: { transition: 100, theme: 'chalkboard' }
+		});
 	</script>
 </body>
 </html>

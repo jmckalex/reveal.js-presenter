@@ -4,16 +4,29 @@
  *
  * An ES module, imported by presenter-master.js only when the deck is opened
  * with ?master=<secret> and audience questions are on, together with
- * presenter-polls.css.  Every other copy of the deck (the published one, the
- * tablet's) never loads it, so there a .poll is an empty element and a
- * .poll-results an empty box.  presenter-master.js hands the module what it
- * needs (the relay socket, the secret, the deck); see loadPolls() there.
+ * presenter-polls.css.  The published deck never loads it, so there a .poll
+ * is an empty element and a .poll-results an empty box.  presenter-master.js
+ * hands the module what it needs (the relay socket, the secret, the deck);
+ * see loadPolls() there.
+ *
+ * The tablet's own copies of the deck (?presenter) load it too, as a mirror,
+ * so that they show what the laptop's screen does: it draws there everything
+ * it draws on the laptop (the pill, the charts, the board, reactions), from
+ * what the tablet page hands it through window.presenterMirror (see
+ * presenter-master.js), and it connects to nothing and sends nothing.
  *
  * A slide asks a poll with, for instance,
+ *     <live-poll name="sleep" kind="number" min="0" max="12" unit="hr|hrs"
+ *                prompt="How long did you sleep?"></live-poll>
+ * which presenter-master.js has already turned into the older markup this
+ * module works on, and which still works too:
  *     <div class="poll" data-poll="sleep" data-kind="number" data-min="0"
  *          data-max="12" data-unit="hr|hrs" data-prompt="How long did you sleep?"></div>
- * or data-kind="choice" data-options="Yes|No|Not sure" (2 to 12 options;
- * data-picks="2" or "all" for several), "scale", "premises", "ranking",
+ * (The comments below give options by those data-* names.)  Or
+ * data-kind="choice" data-options="Yes|No|Not sure" (2 to 12 options;
+ * data-picks="2" or "all" for several, and with them data-exclusive="None of
+ * them", an option that stands alone; or, with one pick, a <template> per
+ * version inside the <live-poll>: see pollDefinition()), "scale", "premises", "ranking",
  * "words", "self-others", "points", "grid" or "pin": README.md lists their
  * attributes, and drawScale() and the others below draw their charts.
  * data-repeat="<another poll>" asks that poll's question again, as a poll of
@@ -27,9 +40,9 @@
  * one, once it is visible -- the poll is open: the audience's ask pages show
  * it in place of the question form, and a pill at the foot of the screen
  * shows how many have answered (data-pill: see showPollStates()).  Leaving
- * the slide closes it.  <div class="poll-results" data-poll="sleep"> on any
+ * the slide closes it.  <poll-results poll="sleep"></poll-results> on any
  * slide (the same one, or a later one; a fragment, to reveal it on a click)
- * draws the answers live.  Add class "overlay" for a card over the slide
+ * draws the answers live.  Add overlay (class "overlay") for a card over the slide
  * instead, which comes up as a step of its own where it stands among the
  * slide's fragments, and exists only in this copy of the deck: other copies
  * of the slide are as written.  The relay keeps the tally, so a reload, or a
@@ -41,9 +54,11 @@
 export default function start(api) {
 	'use strict';
 	const config = api.config;
+	const MIRROR = api.mirror === true;		// a tablet's copy: see above
 	const SECRET = api.secret;
 	const ID = api.channel;
 	const R = () => api.deck();
+	const REPLY_MS = api.replyMs || 5000;		// no reply to poll-open in this long: a dead connection
 	const PILL = typeof config.pollPill === 'string' ? config.pollPill : '';			// see showPollStates()
 	const PILL_POSITION = typeof config.pollPillPosition === 'string' ? config.pollPillPosition : '';
 	const REACTIONS = api.audience.reactions;											// see showReaction()
@@ -75,23 +90,29 @@ export default function start(api) {
 			if (document.querySelector('.reveal .poll[data-kind="words"]')) loadCloudLibrary().catch(e => console.warn('[presenter]', e.message));
 			syncPolls();
 			api.broadcast();
+			// A mirror: from now on, what the tablet page hands it goes here
+			// (presenter-master.js kept anything handed it before).
+			if (MIRROR) api.mirrorReady({ tally: showTally, reset: resetPolls, board: showBoard, reaction: showReaction, sync: () => syncPolls() });
 		};
 		if (api.isReady()) onReady();
 		else reveal.addEventListener('ready', onReady, { once: true });
 		['slidechanged', 'fragmentshown', 'fragmenthidden'].forEach(type => reveal.addEventListener(type, syncPolls));
 		['slidechanged', 'resize'].forEach(type => reveal.addEventListener(type, () => placeOverlays()));
+		if (MIRROR) return;		// it connects to nothing
 
 		api.onQuestionsOpened(res => { if (res && res.board) showBoard(res.board); });
 		api.onSocket(s => {
 			socket = s;
 			s.on('connect', () => {
 				openPoll = null;		// the relay may have restarted: reopen the slide's poll
+				pollsUnsure = true;
 				syncPolls();
 			});
 			s.on('poll-tally', showTally);
+			s.on('reset', resetPolls);
 			s.on('board', showBoard);
 			s.on('reaction', showReaction);
-			if (s.connected) { openPoll = null; syncPolls(); }
+			if (s.connected) { openPoll = null; pollsUnsure = true; syncPolls(); }
 		});
 	}
 
@@ -145,6 +166,7 @@ export default function start(api) {
 
 	// ---- Polls
 
+	const warnedExclusive = new Set();
 	function pollDefinition(el) {
 		// A repeat takes the other poll's attributes, under its own id (and any
 		// of its own that differ).
@@ -167,8 +189,11 @@ export default function start(api) {
 		case 'ranking':
 			return { ...base, options: list(d.options) };
 		case 'words': {
+			// Words go straight to the screen, but for any the relay's word
+			// filter catches, which wait on the tablet; data-moderate="on"
+			// holds every word for the tablet's approval.
 			const vertical = parseFloat(d.vertical ?? '0.5');
-			return { ...base, entries: int(d.entries, 1), moderated: d.moderate !== 'off', filter: d.filter !== 'off',
+			return { ...base, entries: int(d.entries, 1), moderated: d.moderate === 'on', filter: d.filter !== 'off',
 				vertical: Number.isFinite(vertical) ? Math.min(1, Math.max(0, vertical)) : 0.5,
 				colours: d.colours === 'shades' ? 'shades' : 'palette' };
 		}
@@ -192,8 +217,25 @@ export default function start(api) {
 		}
 		default: {
 			const options = list(d.options);
-			const picks = d.picks === 'all' ? options.length : int(d.picks, 1);
-			return picks > 1 ? { ...base, kind: 'choice', options, picks } : { ...base, kind: 'choice', options };
+			// data-exclusive="None of them", with several picks: an option a
+			// phone may choose only on its own (ticking it unticks the rest,
+			// and the reverse), so "all" is all the others.
+			const exclusive = d.exclusive === undefined ? -1 : options.indexOf(d.exclusive.trim());
+			if (d.exclusive !== undefined && exclusive < 0 && !warnedExclusive.has(d.poll)) {
+				warnedExclusive.add(d.poll);
+				console.warn(`[presenter] poll "${d.poll}": exclusive="${d.exclusive}" is not one of its options`);
+			}
+			const most = exclusive < 0 ? options.length : options.length - 1;
+			const picks = d.picks === 'all' ? most : Math.min(int(d.picks, 1), most);
+			// Versions, for an experiment: the relay deals each phone one, in
+			// turn, and sends it only that one's story and question.  Each is a
+			// <template data-version="name" data-prompt="question"> inside the
+			// <live-poll>, holding the story (as plain text).  Single pick only.
+			const versions = [...el.querySelectorAll(':scope > template[data-version]')].map(t => ({
+				name: t.dataset.version.trim(), prompt: (t.dataset.prompt || '').trim(), story: t.content.textContent.replace(/\s+/g, ' ').trim() }));
+			if (versions.length >= 2 && picks === 1) return { ...base, kind: 'choice', options, versions };
+			if (!(picks > 1)) return { ...base, kind: 'choice', options };
+			return exclusive < 0 ? { ...base, kind: 'choice', options, picks } : { ...base, kind: 'choice', options, picks, exclusive };
 		}
 		}
 	}
@@ -209,30 +251,48 @@ export default function start(api) {
 	const byPoll = (selector, id) => document.querySelectorAll(`.reveal ${selector}[data-poll="${CSS.escape(id)}"]`);
 	const tallies = new Map();		// poll id -> its latest tally from the relay
 	let openPoll = null;
+	// After a reconnect the relay may have a poll open that this page has
+	// since left (its poll-close lost with the dead connection), so the next
+	// sync closes one even if this page thinks none is open.
+	let pollsUnsure = true;
 
 	// Open the poll on the current slide, if any, or close the open one; and
 	// fetch the tallies of any results shown here for other polls.
+	// (A mirror opens nothing: it shows the poll open that the laptop opens,
+	// and asks the tablet page for the tallies.)
 	function syncPolls() {
-		if (!socket || !socket.connected || !api.isReady()) return;
+		if (!api.isReady() || (!MIRROR && (!socket || !socket.connected))) return;
 		const slide = R().getCurrentSlide();
 		const el = slide && [...slide.querySelectorAll('.poll[data-poll]')]
 			.find(e => !e.closest('.fragment:not(.visible)'));
-		if (el && el.dataset.poll !== openPoll) {
+		if (MIRROR) openPoll = el ? el.dataset.poll : null;
+		else if (el && el.dataset.poll !== openPoll) {
 			openPoll = el.dataset.poll;
-			socket.emit('poll-open', { socketId: ID, secret: SECRET, poll: pollDefinition(el) }, res => {
-				if (res && res.ok) showTally(res.tally);
+			const opened = (err, res) => {
+				if (err) api.reconnect('poll-open');		// a new connection reopens the poll
+				else if (res && res.ok) showTally(res.tally);
 				else console.warn('[presenter] the relay refused poll "' + el.dataset.poll + '"', res);
-			});
+			};
+			const message = { socketId: ID, secret: SECRET, poll: pollDefinition(el) };
+			// No reply means the connection is dead (see presenter-master.js).
+			// (socket.timeout() is Socket.IO 4's; an older client just waits.)
+			if (typeof socket.timeout === 'function') socket.timeout(REPLY_MS).emit('poll-open', message, opened);
+			else socket.emit('poll-open', message, res => opened(null, res));
 		}
-		else if (!el && openPoll !== null) {
+		else if (!el && (openPoll !== null || pollsUnsure)) {
 			openPoll = null;
 			socket.emit('poll-close', { socketId: ID, secret: SECRET });
 		}
+		pollsUnsure = false;
 		showPollStates();
 		const wanted = new Set();
 		for (const box of slide ? slide.querySelectorAll('.poll-results[data-poll]') : []) {
 			wanted.add(box.dataset.poll);
 			if (box.dataset.before) wanted.add(box.dataset.before);
+		}
+		if (MIRROR) {
+			if (openPoll !== null) wanted.add(openPoll);
+			return api.want([...wanted]);
 		}
 		for (const id of wanted) {
 			if (id === openPoll) continue;
@@ -246,6 +306,15 @@ export default function start(api) {
 		if (!tally || typeof tally.id !== 'string') return;
 		tallies.set(tally.id, tally);
 		drawResults(tally.id);
+		showPollStates();
+	}
+
+	// The tablet's Reset: the relay has forgotten every poll, so every chart
+	// starts empty again.  A poll open now stays open (the relay opened it
+	// again), and its new, empty tally follows.
+	function resetPolls() {
+		tallies.clear();
+		new Set([...document.querySelectorAll('.reveal .poll-results[data-poll]')].map(box => box.dataset.poll)).forEach(drawResults);
 		showPollStates();
 	}
 
@@ -298,14 +367,14 @@ export default function start(api) {
 	// Draw every .poll-results for a poll, from its definition (its .poll, on
 	// whichever slide) and its tally; and every one comparing it, as the
 	// earlier poll, with a later one (data-before).
-	const KINDS = ['choice', 'number', 'scale', 'premises', 'ranking', 'words', 'self-others', 'points', 'grid', 'pin', 'compare'];
+	const KINDS = ['choice', 'number', 'scale', 'premises', 'ranking', 'words', 'self-others', 'points', 'grid', 'pin', 'compare', 'versions'];
 	function drawResults(id) {
 		const el = byPoll('.poll', id)[0];
 		if (el) {
 			const def = pollDefinition(el);
 			const tally = tallies.get(id) || { total: 0 };
 			const boxes = [...byPoll('.poll-results', id)];
-			const draw = { choice: drawBars, number: drawBars, scale: drawScale, premises: drawPremises, ranking: drawRanking, words: drawWords,
+			const draw = def.versions ? drawVersions : { choice: drawBars, number: drawBars, scale: drawScale, premises: drawPremises, ranking: drawRanking, words: drawWords,
 				'self-others': drawSelfOthers, points: drawPoints, grid: drawGrid, pin: drawPin }[def.kind];
 			if (draw) draw(def, tally, boxes.filter(b => !b.dataset.before));
 			boxes.filter(b => b.dataset.before).forEach(drawCompare);
@@ -394,9 +463,14 @@ export default function start(api) {
 						chart.append(label, bar, n);
 					}
 					else {
+						// A sign ("%") hangs on the number, with no space, but is a
+						// span of its own too, so that fitLabels() can drop it from
+						// labels too wide for their columns ("10–19%" under eleven).
 						const [number, word] = unitParts(b.label, def.unit);
-						label.append(node('span', '', number));
+						const sign = !word && number !== b.label ? number.slice(b.label.length) : '';
+						label.append(node('span', '', sign ? b.label : number));
 						if (word) label.append(' ', node('span', 'word', word));
+						else if (sign) label.append(node('span', 'word sign', sign));
 						const col = node('div', 'col');
 						col.append(n, bar);
 						chart.append(col, label);
@@ -541,6 +615,50 @@ export default function start(api) {
 	const colour = k => `var(--poll-colour-${(k % 8) + 1})`;
 	// Shades of the accent colour, from light (0) to full (1).
 	const shade = t => `color-mix(in srgb, var(--poll-accent) ${Math.round(18 + 82 * t)}%, var(--poll-card))`;
+
+	// A choice poll in versions (see pollDefinition()): a column per version,
+	// the share of its answers choosing one option (data-share, an option's
+	// text; the first by default), with how many that is of how many; and,
+	// with data-reference ("82|23": a percentage per version), a dashed mark
+	// on each column, labelled with data-reference-label ("Knobe: 82%").  The
+	// summary says how many phones the relay dealt each version.  Built once
+	// and then only resized, so that the columns grow as answers arrive.  (The
+	// tally's counts are per version and option: version × options + option.)
+	function drawVersions(def, tally, boxes) {
+		const m = def.options.length, counts = tally.counts || [], dealt = tally.dealt || [];
+		for (const box of boxes) {
+			const wanted = (box.dataset.share || '').trim().toLowerCase();
+			const t = Math.max(0, def.options.findIndex(o => o.toLowerCase() === wanted));
+			const refs = (box.dataset.reference || '').split('|').map(parseFloat);
+			const layout = ['versions', ...def.versions.map(v => v.name), t, box.dataset.reference || ''].join('|');
+			if (box.dataset.layout !== layout) {
+				const chart = node('div', 'chart');
+				def.versions.forEach((v, k) => {
+					const column = node('div', 'column');
+					column.append(node('div', 'bar'));
+					if (Number.isFinite(refs[k])) {
+						const mark = node('div', 'reference');
+						mark.style.setProperty('--at', Math.min(100, Math.max(0, refs[k])) / 100);
+						mark.append(node('span', '', (box.dataset.referenceLabel ? box.dataset.referenceLabel + ': ' : '') + fmt(refs[k]) + '%'));
+						column.append(mark);
+					}
+					const version = node('div', 'version');
+					version.append(node('div', 'share'), column, node('div', 'name', v.name), node('div', 'count'));
+					chart.append(version);
+				});
+				fill(box, { ...def, kind: 'versions' }, chart, ' ');
+				box.dataset.layout = layout;
+			}
+			box.querySelectorAll('.version').forEach((e, k) => {
+				const n = counts.slice(k * m, (k + 1) * m).reduce((a, b) => a + (b || 0), 0), chose = counts[k * m + t] || 0;
+				e.querySelector('.share').textContent = n ? Math.round(100 * chose / n) + '%' : '–';
+				e.querySelector('.bar').style.setProperty('--share', n ? chose / n : 0);
+				e.querySelector('.count').textContent = `${chose} of ${n} said “${def.options[t]}”`;
+			});
+			box.querySelector('.summary').textContent = plural(tally.total || 0, 'answer')
+				+ (dealt.length ? ' · dealt ' + def.versions.map((v, k) => `${v.name} ${dealt[k] || 0}`).join(', ') : '');
+		}
+	}
 
 	// A scale: for each statement, a bar divided by rating, lightest for the
 	// lowest, with the mean beside it, and a key below.
@@ -687,14 +805,17 @@ export default function start(api) {
 		}
 	}
 
-	// ---- Before and after: <div class="poll-results" data-poll="after"
-	// data-before="before">, where "after" asks "before"'s question again
+	// ---- Before and after: <poll-results poll="after" before="before">,
+	// where "after" asks "before"'s question again
 	// (data-repeat).  Phones are matched by their aliases (the same for a
 	// phone across a session's polls), so the chart shows who changed their
 	// mind, not just the totals.  A single-pick choice poll gives a flow from
 	// each earlier answer to each later one; a number poll, a line per phone
 	// from its first answer to its second; a scale, premises, points or
-	// ranking poll, each row's average before and after.
+	// ranking poll, each row's average before and after.  The two polls need
+	// not be one question asked twice: data-headings="Harm|Help" names the two
+	// sides (otherwise "Before" and "After"), and the summary then says who
+	// answered differently rather than who changed their minds.
 	function drawCompare(box) {
 		const afterEl = byPoll('.poll', box.dataset.poll)[0], beforeEl = byPoll('.poll', box.dataset.before)[0];
 		if (!afterEl || !beforeEl) return;
@@ -709,13 +830,16 @@ export default function start(api) {
 		const head = `${both.length} ${both.length === 1 ? 'person' : 'people'} answered both`;
 		const def = { ...after, kind: 'compare' };
 		const same = after.kind === before.kind;
+		const named = (box.dataset.headings || '').split('|').map(s => s.trim());
+		const heads = named.length === 2 && named.every(Boolean) ? named : ['Before', 'After'];
+		const moved = heads === named ? 'answered differently' : 'changed their minds';
 		let chart, lines = [];
 		if (same && after.kind === 'choice' && !after.picks && !before.picks && after.options.length === before.options.length) {
-			chart = flowChart(before.options, pairs);
+			chart = flowChart(before.options, pairs, heads);
 			const moves = new Map();
 			pairs.forEach(([x, y]) => { if (x !== y) moves.set(x + '>' + y, (moves.get(x + '>' + y) || 0) + 1); });
 			const list = [...moves].sort((a, b) => b[1] - a[1]).map(([k, c]) => { const [x, y] = k.split('>').map(Number); return `${c} ${before.options[x]} → ${after.options[y]}`; });
-			lines.push(`${head} · ${changed} changed their minds${list.length ? ': ' + list.join(', ') : ''}.` + tail);
+			lines.push(`${head} · ${changed} ${moved}${list.length ? ': ' + list.join(', ') : ''}.` + tail);
 		}
 		else if (same && after.kind === 'number') {
 			chart = slopeChart(after, pairs);
@@ -730,7 +854,7 @@ export default function start(api) {
 			const scaleOf = after.kind === 'premises' ? v => 100 * v : v => v;
 			const unit = after.kind === 'premises' ? '%' : after.kind === 'points' ? (after.unit || '') : '';
 			chart = node('div', 'chart rows');
-			chart.append(node('div', 'head', ''), node('div', 'head', 'Before'), node('div', 'head', ''), node('div', 'head', 'After'));
+			chart.append(node('div', 'head', ''), node('div', 'head', heads[0]), node('div', 'head', ''), node('div', 'head', heads[1]));
 			rows.forEach((text, k) => {
 				const m = [0, 1].map(i => pairs.length ? scaleOf(mean(pairs.map(p => value(p[i], k)))) : null);
 				const arrow = m[0] === null ? '' : m[1] > m[0] + 0.05 ? '↗' : m[1] < m[0] - 0.05 ? '↘' : '→';
@@ -751,7 +875,7 @@ export default function start(api) {
 	// column of blocks either side, sized by how many gave that answer among
 	// those who answered both, and a band for each change, coloured by the
 	// earlier answer; bands for those who stayed are paler.
-	function flowChart(options, pairs) {
+	function flowChart(options, pairs, heads) {
 		const n = pairs.length, m = options.length, GAP = 2, EMPTY = 3;		// an option nobody gave still has a sliver, and its label
 		const chart = node('div', 'chart flow');
 		const usable = 100 - GAP * (m - 1);
@@ -768,7 +892,7 @@ export default function start(api) {
 		});
 		const columns = [0, 1].map(i => {
 			const col = node('div', 'side side-' + i);
-			col.append(node('div', 'flow-head', i ? 'After' : 'Before'));
+			col.append(node('div', 'flow-head', heads[i]));
 			const track = node('div', 'track');
 			options.forEach((label, k) => {
 				const b = sides[i][k];
@@ -860,7 +984,8 @@ export default function start(api) {
 		];
 		const lines = [];
 		if (n) {
-			lines.push(`The room guessed that ${fmt(guess(answers), 0)}% would say “${option}”; ${fmt(actual, 0)}% did.`);
+			// (Worded to fit either sort of question: what people would answer, or what they would do.)
+			lines.push(`The room’s average guess was ${fmt(guess(answers), 0)}%; ${fmt(actual, 0)}% said “${option}”.`);
 			if (said.length >= 2 && rest.length >= 2 && Math.abs(guess(said) - guess(rest)) >= 10)
 				lines.push(guess(said) > guess(rest) ? `Those who said “${option}” guessed higher than the rest: each side thought the room more like itself.`
 					: `Those who said “${option}” guessed lower than the rest.`);
@@ -923,6 +1048,12 @@ export default function start(api) {
 
 	// ---- A 2×2 grid (data-kind="grid"): each item placed on two axes by
 	// every phone (faint dots), and its average position (a numbered disc).
+	// The items take their own palette (--poll-grid-colour-1 … -8), of hues
+	// far apart, since they are told apart by colour alone wherever two land
+	// side by side; each item's number is drawn in the ink that reads on its
+	// colour (--poll-grid-ink-1 … -8).
+	const gridColour = k => `var(--poll-grid-colour-${k + 1})`;
+	const gridInk = k => `var(--poll-grid-ink-${k + 1})`;
 	function drawGrid(def, tally, boxes) {
 		const answers = answersOf(tally), n = answers.length;
 		const span = def.max - def.min;
@@ -946,16 +1077,21 @@ export default function start(api) {
 			add('text', { x: 99, y: 106, class: 'axis', 'text-anchor': 'end' }, def.x[1]);
 			add('text', { x: -3, y: 99, class: 'axis', transform: 'rotate(-90 -3 99)' }, def.y[0]);
 			add('text', { x: -3, y: 1, class: 'axis', 'text-anchor': 'end', transform: 'rotate(-90 -3 1)' }, def.y[1]);
-			def.items.forEach((_, k) => answers.forEach(a => add('circle', { cx: px(a[k][0]), cy: py(a[k][1]), r: 1.1, class: 'one' }, undefined, colour(k))));
+			def.items.forEach((_, k) => answers.forEach(a => add('circle', { cx: px(a[k][0]), cy: py(a[k][1]), r: 1.1, class: 'one' }, undefined, gridColour(k))));
 			const legend = node('ol', 'legend');
 			def.items.forEach((item, k) => {
 				if (n) {
 					const x = mean(answers.map(a => a[k][0])), y = mean(answers.map(a => a[k][1]));
-					add('circle', { cx: px(x), cy: py(y), r: 3.4, class: 'mean' }, undefined, colour(k));
-					add('text', { x: px(x), y: py(y) + 1.4, class: 'num', 'text-anchor': 'middle' }, String(k + 1));
+					add('circle', { cx: px(x), cy: py(y), r: 3.4, class: 'mean' }, undefined, gridColour(k));
+					add('text', { x: px(x), y: py(y) + 1.4, class: 'num', 'text-anchor': 'middle' }, String(k + 1), gridInk(k));
 				}
-				const li = node('li', '', item);
-				li.style.setProperty('--colour', colour(k));
+				// The legend's numbers are discs like the chart's, not numbers in
+				// the item's colour, which would not read in the paler ones.
+				const li = node('li');
+				const key = node('span', 'key', String(k + 1));
+				key.style.setProperty('--colour', gridColour(k));
+				key.style.setProperty('--ink', gridInk(k));
+				li.append(key, item);			// (append: the item's text as text)
 				legend.append(li);
 			});
 			chart.append(svg, legend);
@@ -1065,7 +1201,7 @@ export default function start(api) {
 	}
 
 	// ---- The board: questions the tablet shared, most votes first.  Any
-	// <div class="qa-board" data-top="5"></div> on a slide shows the top few,
+	// <qa-board top="5"></qa-board> on a slide shows the top few,
 	// live.  Only this copy of the deck fills it.
 	let board = { items: [] };
 	function showBoard(b) {
@@ -1288,13 +1424,15 @@ export default function start(api) {
 	// A unit stays on a chart's labels only if every one fits its column; if
 	// not ("hours" under 25 columns), the labels are the numbers alone, and the
 	// unit is in the median and mean below.  If some units wrap below their
-	// numbers, all do, to look even.  Checked again whenever the chart is
-	// resized, which includes its slide first being shown.
+	// numbers, all do, to look even; but a sign ("%") is dropped rather than
+	// put below.  Checked again whenever the chart is resized, which includes
+	// its slide first being shown.
 	function fitLabels(box) {
 		box.classList.remove('bare', 'stacked');
 		const labels = [...box.querySelectorAll('.label')].filter(l => l.querySelector('.word'));
-		if (labels.some(l => l.scrollWidth > l.clientWidth + 1)) box.classList.add('bare');
-		else if (labels.some(l => l.querySelector('.word').offsetTop > l.firstChild.offsetTop)) box.classList.add('stacked');
+		const wrapped = labels.filter(l => l.querySelector('.word').offsetTop > l.firstChild.offsetTop);
+		if (labels.some(l => l.scrollWidth > l.clientWidth + 1) || wrapped.some(l => l.querySelector('.sign'))) box.classList.add('bare');
+		else if (wrapped.length) box.classList.add('stacked');
 	}
 	const refit = new ResizeObserver(entries => entries.forEach(e => { fitLabels(e.target); refitCloud(e.target); paintPins(e.target); }));
 

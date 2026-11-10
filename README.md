@@ -3,16 +3,22 @@
 A presenter view for [reveal.js](https://revealjs.com) on a second device. Prop
 an iPad on the lectern (or hold a phone), and it shows:
 
-- the current slide, exactly as the audience sees it, fragments included;
+- the current slide, exactly as the audience sees it: fragments, the deck's
+  own controls, and (with audience questions on) whatever is written on it,
+  the QR code and the poll charts the laptop draws;
 - the next slide, or the next fragment, so you know what your click will reveal;
 - your speaker notes (`<aside class="notes">` or `data-notes`), resizable;
-- a clock and a timer; and badges for a blanked screen or open overview.
+- a clock and a timer; and the overview or a blanked screen as the laptop has
+  them, with a badge.
 
 reveal.js's own speaker view (the `S` key) opens a popup tied to the laptop's
 browser, so it can't move to another device. This can, and it works when you
 are nowhere near the laptop. Optionally, the audience can send questions to it
 from their phones, by scanning a QR code on a slide, and answer live polls,
-whose results the laptop draws on the slides.
+whose results the laptop draws on the slides. With the chalkboard plugin in
+`client/vendor/chalkboard`, the tablet's **Drive** button also makes it the
+laptop's pen: an Apple Pencil writes on the projected slide, or on a
+chalkboard that scrolls down without end, and ◀ ▶ step through the talk.
 
 ![The laptop deck and the tablet's presenter view side by side, as the laptop steps through the demo deck and a student's question arrives on the tablet](docs/demo.gif)
 
@@ -64,8 +70,12 @@ decks must be reachable from it: see [Doing it by hand](#doing-it-by-hand).
   [reveal/multiplex](https://github.com/reveal/multiplex) server works; so does
   the stricter one in `server/`.
 - The **tablet** opens `presenter.html`, which loads your deck twice in
-  iframes: one for the current slide and one for the next. It moves both to
-  follow the laptop, through each copy's `Reveal` object.
+  iframes (as `deck.html?presenter`): one for the current slide and one for
+  the next. It moves both to follow the laptop, through each copy's `Reveal`
+  object. With audience questions on, each copy also runs the laptop's script
+  as a *mirror*, drawing what the laptop draws (the QR code, the poll pill,
+  the charts) from what the tablet hands it, and the current copy shows what
+  is written on the laptop's slide as it is written.
 
 The two devices never connect to each other, only to the relay. So they need
 internet access, but not the same network. That matters because conference
@@ -74,7 +84,9 @@ reaching each other directly.
 
 A deck opened *without* `?master` is untouched. The script returns
 immediately, and the deck never contacts the relay. So your published decks
-behave exactly as before, for you and for everyone else.
+behave exactly as before, for you and for everyone else. The tablet's own
+copies (`?presenter`) never contact the relay either: the tablet page does
+that for them.
 
 ## Using it with Claude Code
 
@@ -102,7 +114,9 @@ modules), what to ask you, and the design decisions that must not be
    your decks, e.g. `/presenter/`. The presenter page drives the decks through
    their JavaScript, which browsers allow only within one origin. For audience
    questions and polls, add `ask.html`, `presenter-polls.js`,
-   `presenter-polls.css` and `vendor/` (the QR code) to the same directory.
+   `presenter-polls.css`, `presenter-mirror.js` and `vendor/` (the QR code) to
+   the same directory; for Drive and the laptop's writing on the tablet, also
+   `presenter-drive.js`, `presenter-driver.js` and `presenter-ink.js`.
 4. **Add two lines to every deck**, or once to a shared template, anywhere
    after reveal.js is loaded:
    ```html
@@ -111,6 +125,11 @@ modules), what to ask you, and the design decisions that must not be
    ```
    The deck must expose `window.Reveal`. The standard `dist/reveal.js` script
    does this. With ES modules, add `window.Reveal = deck` after creating it.
+   For Drive, the deck also loads the chalkboard plugin from
+   `vendor/chalkboard` (its `style.css` and `plugin.js`, with `RevealChalkboard`
+   among its plugins; `example/index.html` shows how). It must be this copy:
+   rajgoel's plugin, changed so that writing belongs to a slide and a following
+   copy can be given a slide's drawings.
 5. **Publish** the decks and the `/presenter/` directory.
 
 ## In the room
@@ -131,18 +150,32 @@ before the laptop speaks.
 
 The tablet loads the deck *from the site*, so the published copy must match
 the one on the laptop. If you present from a local copy, publish your changes
-first, or the slides won't line up. If the laptop serves decks under different
-paths from the site, set `deckUrl` in `presenter-config.js` to map one onto the
-other.
+first, or the slides won't line up. The laptop sends its slide count with its
+position, and a tablet whose copy has another count shows a red strip across
+the slide and "Following, but the copies differ". If the laptop serves decks
+under different paths from the site, set `deckUrl` in `presenter-config.js` to
+map one onto the other.
+
+Two buttons on the tablet each take two taps within four seconds ("Tap
+again"): **Reset**, in the questions' header, starts the talk again from a
+clean state after a rehearsal (see [What a chart can add](#what-a-chart-can-add));
+**Reload** fetches again every file of the site that the page and its two
+copies have loaded, bypassing the browser's cache, and reloads the page. A
+Home Screen web app has no reload button, and a server that lets browsers keep
+files for days would otherwise leave it running an old deck. The key survives,
+and the timer carries over (Start becomes Resume).
 
 ## Audience questions
 
 Students can send questions straight to the tablet, from their phones:
 
 1. The **laptop** deck shows a 4-digit code on a slide: put
-   `<span class="question-code">····</span>` wherever you want it. Only the
-   laptop's copy knows the code, because it is derived from the secret, and it
-   changes daily. Everyone else, including the published deck, sees the dots.
+   `<question-code></question-code>` (or `<span class="question-code">····</span>`)
+   wherever you want it. Only the laptop's copy knows the code, because it is
+   derived from the secret, and it changes daily. Everyone else, including the
+   published deck, sees nothing (or the dots). A deck may instead fix its own
+   code, the same every time, with `code="1234"` on its `<question-qr>`
+   (below); that code is then visible in the deck's source.
 2. **Students** open `ask.html`, most easily by scanning a QR code on the
    same slide (below), which fills the code in for them. They type a question
    of up to 280 characters, and press Send. They are told whether it was
@@ -173,17 +206,33 @@ To turn questions on, `tools/make-channel.js` prints a tablet key and puts its
 hash in `presenter-config.js` as `questionsKey`. Without `questionsKey`,
 everything behaves as before.
 
-**The QR code.** Put `<div class="question-qr"></div>` on the slide, and give
-`make-channel.js` the public address of `ask.html` with `--ask` (it becomes
-`askUrl` in the config). The laptop's copy then draws a QR code for
-`ask.html?code=<today's code>` into the element; every other copy leaves it
-empty. Size the element with CSS; the code fills its width. It always points
-at `askUrl`, never at the deck's own address, so it works when you present
-from `localhost`. The drawing is done by the vendored
-[QR Studio](client/vendor/README.md); `qrOptions` in the config is passed to
-it, e.g. `{ moduleStyle: 'rounded', foreground: '#604e25' }`. Its default
-background is transparent, so test a busy slide background with a phone in
-the room.
+**The QR code.** Put `<question-qr></question-qr>` (or
+`<div class="question-qr"></div>`) on the slide, and give `make-channel.js`
+the public address of `ask.html` with `--ask` (it becomes `askUrl` in the
+config). The laptop's copy then draws a QR code for `ask.html?code=<the code>`
+into the element, captioned "Ask a question"; the tablet's copies draw it too,
+and every other copy leaves it empty. Size the element with CSS; the code
+fills its width. It always points at `askUrl`, never at the deck's own
+address, so it works when you present from `localhost`. On the element:
+
+- `code="1234"` fixes the deck's code, as above;
+- `short-url="example.org/ask"` captions the code with a short link that
+  carries the code (one you have made at a link shortener), for students who
+  would rather type than scan; it needs a `code`;
+- `text="…"` sets the caption otherwise (`text=""` for none), and `text-size`
+  its size, in the code's units (1000 wide, default 80) or as a percentage of
+  that (`"150%"`); a caption too long for the code's width is set smaller.
+
+The drawing is done by the vendored [QR Studio](client/vendor/README.md);
+`qrOptions` in the config is passed to it, e.g.
+`{ moduleStyle: 'rounded', foreground: '#604e25' }` (a `foreground` colours
+the caption too). Its default background is transparent, so test a busy slide
+background with a phone in the room.
+
+`body.question-qr-hidden` hides every QR code. A deck with a customcontrols
+toolbar gets a button on it for that (`questionButton`, in
+[Settings](#settings)), so the codes needn't be forgotten in the rush before
+a talk; the tablet shows the codes hidden or shown as the laptop has them.
 
 ## Live polls
 
@@ -191,10 +240,26 @@ With questions on, a deck can also ask the audience things, and show the
 answers on the slides as they arrive. A poll is an empty element on a slide:
 
 ```html
+<live-poll name="sleep" kind="number" min="0" max="12" unit="hr|hrs"
+           prompt="How many hours did you sleep last night?"></live-poll>
+<poll-results poll="sleep"></poll-results>
+```
+
+or, in the older markup, which still works:
+
+```html
 <div class="poll" data-poll="sleep" data-kind="number" data-min="0" data-max="12"
      data-unit="hr|hrs" data-prompt="How many hours did you sleep last night?"></div>
 <div class="poll-results" data-poll="sleep"></div>
 ```
+
+The laptop's script turns each custom element into the older markup before
+anything else uses it: `<live-poll>` becomes `.poll`, `<poll-results>`
+`.poll-results`, `<qa-board>` `.qa-board`, and each attribute its `data-`
+form, a `<live-poll>`'s `name` becoming `data-poll` and a `<poll-results>`'s
+`overlay` a class. The tables below give the attributes in their `data-` form.
+**Always write the closing tag:** `<live-poll … />` does not end the element,
+which then swallows the rest of the slide (the laptop warns in the console).
 
 - While that slide is showing on the laptop (`?master`), the poll is **open**:
   every phone on the ask page swaps the question form for it ("Live poll"),
@@ -207,15 +272,18 @@ answers on the slides as they arrive. A poll is an empty element on a slide:
 - With class `overlay`, the chart is instead a card over the slide below its
   title, with the poll's prompt, as a step of its own where it stands among
   the slide's fragments; the next click takes it away. That step exists only
-  on the laptop, and the tablet is sent the position without it, so the two
-  stay in line.
+  on the laptop and in the tablet's copies (which mirror it); the position is
+  sent without it, with the laptop's own index besides, so every copy stays
+  in line.
 - Each phone answers once and may change its answer while the poll is open.
   It is counted by a random id kept in its own storage. Poll answers carry no
   name.
-- **Only the laptop's copy draws anything.** Opened without `?master`, a
-  deck's `.poll` and `.poll-results` stay empty, so an inline chart leaves an
-  empty space (and an empty step, if it is a fragment) in the published copy
-  and on the tablet. Overlays leave nothing.
+- **Only the laptop's copy, and the tablet's copies of it, draw anything.**
+  The tablet's copies draw exactly what the laptop does, from the tallies the
+  relay sends the tablet with its key. Opened any other way, a deck's `.poll`
+  and `.poll-results` stay empty, so an inline chart leaves an empty space
+  (and an empty step, if it is a fragment) in the published copy. Overlays
+  leave nothing.
 
 ### The kinds of poll
 
@@ -226,24 +294,25 @@ the kind).
 
 | `data-kind` | Attributes | The phone | The chart |
 |---|---|---|---|
-| `choice` (the default) | `data-options` (2–12); `data-picks="2"`, or `"all"`, for several | buttons; with picks, ticks and Send | a bar per option |
+| `choice` (the default) | `data-options` (2–12); `data-picks="2"`, or `"all"`, for several; with picks, `data-exclusive="None of them"` (an option's text) for one that stands alone, `"all"` then meaning all the others | buttons; with picks, ticks and Send, ticking the exclusive option unticking the rest, and the reverse | a bar per option |
 | `number` | `data-min`, `data-max` (whole numbers, up to a million apart), `data-unit` (`"%"`, or a singular and plural, `"hr\|hrs"`) | a button per value, up to 13 values; a slider, up to 101; else a field to type in | a column per value, or per range of values, with the median and mean |
 | `scale` | `data-statements` (1–12), `data-min` (1), `data-max` (5), `data-labels="Disagree\|Agree"` | stars per statement when `min` is 1, else a row of numbers | a bar per statement divided by rating, with its mean |
 | `premises` | `data-statements` (2–12, the conclusion last, or `data-conclusion="n"`, from 1), `data-labels` (`Accept\|Reject`) | accept or reject each | how many accept each, against the halfway line; it flags the discursive dilemma |
 | `ranking` | `data-options` (2–10) | tap the options in order | the options by average position |
-| `words` | `data-entries` (1–5 per phone), `data-moderate="off"`, `data-filter="off"`, `data-vertical` (the share of words on end, 0–1, default 0.5), `data-colours="shades"` | type words or short phrases | a word cloud of the approved words |
+| `words` | `data-entries` (1–5 per phone), `data-moderate="on"`, `data-filter="off"`, `data-vertical` (the share of words on end, 0–1, default 0.5), `data-colours="shades"` | type words, each a tag (a space, comma, semicolon or return ends one, so a phrase becomes separate words) | a word cloud of the words shown |
 | `self-others` | `data-options` (`Yes\|No`), `data-target` (from 1), `data-others` (the second question) | your own answer, then a guess at the room's percentage | the share who gave the target answer, against the room's guesses |
-| `points` | `data-options` (2–10), `data-total` (100), `data-unit` | a slider per option; Send once they add up | each option's average, and each answer as a dot |
-| `grid` | `data-items` (1–8), `data-x="Slow\|Fast"`, `data-y="Shallow\|Deep"`, `data-min`, `data-max` (0, 10) | a square per item to tap | each item's average place, and each answer as a dot |
+| `points` | `data-options` (2–10), `data-total` (100), `data-unit` | a slider per option, each stopping where the total would be passed; Send once they add up | each option's average, and each answer as a dot |
+| `grid` | `data-items` (1–8), `data-x="Slow\|Fast"`, `data-y="Shallow\|Deep"`, `data-min`, `data-max` (0, 10) | a square per item to tap | each item's average place as a numbered disc, and each answer as a dot, in hues far apart (two items may land side by side) |
 | `pin` | `data-image`, `data-alt` | tap the picture | a heat map over the picture |
 
-**A word cloud's words wait for the tablet.** They are free text from the
-audience, so each goes first to the tablet, where you tap it (or "Show all
-new") to put it on the screen; the laptop never receives a word you haven't
-shown. With `data-moderate="off"` every word goes straight up, except those
-the relay's word filter catches (swear words and slurs, also spelt "sh1t" or
-"f u c k"): those wait, flagged ⚑. The filter only holds a word, never refuses
-it, so a false alarm costs one tap. The cloud is laid out by
+**A word cloud's words go up at once, but for any the filter catches.** They
+are free text from the audience, so every word also appears on the tablet,
+where a tap hides it from the screen (or shows it again). The relay's word
+filter (swear words and slurs, also spelt "sh1t" or "f u c k") holds any word
+it catches for the tablet, flagged ⚑; it only holds a word, never refuses it,
+so a false alarm costs one tap. With `data-moderate="on"` every word waits for
+the tablet, where you tap it (or "Show all new") to put it on the screen; the
+laptop never receives a word that hasn't been shown. The cloud is laid out by
 [d3-cloud](https://github.com/jasondavies/d3-cloud), as in Wordle.
 
 **A pin poll's picture** must be one the phones can load over `https`. A
@@ -263,7 +332,9 @@ On a `.poll-results` (not the `.poll`):
 | `data-payoffs="4 0 \| 3 3"` | choice, one pick | a game against the room: a row of payoffs per option (here, the stag hunt); each option's expected payoff against someone picked at random from the room, and the best reply |
 | `data-display="rules"` | ranking | the winner and the full order under plurality, the Borda count, Condorcet and instant runoff |
 | `data-display="dots"` | pin | a dot per answer instead of the heat map |
-| `data-before="<poll>"` | any | before and after: see below |
+| `data-before="<poll>"` | any | before and after: see below; `data-headings="Harm\|Help"` names the two sides in place of "Before" and "After" |
+| `data-share="Yes"` | choice, in versions | a column per version: the share of its phones choosing that option (the first by default), and how many were dealt it |
+| `data-reference="82\|23"` | choice, in versions | a dashed mark per version for a published figure, labelled `data-reference-label` |
 
 Two charts of one poll, the second a fragment with `data-answer`, reveal the
 truth on a click.
@@ -277,44 +348,38 @@ points, ranking). Only phones that answered both count. The relay matches
 phones by aliases it makes afresh each time it starts, so it must not restart
 between the two.
 
-**Versions** (relay protocol only, for now). A single-pick choice poll may come
-in two to four versions, each `{ name, prompt, story }`: an experiment in which
-each phone sees one version and the versions' answers are compared (Knobe's
-two stories of the chairman). The relay deals the versions out in turn as each
-phone is first sent the poll, keeps which phone has which with the poll, and
-sends a phone only its own `prompt` and `story` (up to 1200 characters). A
-phone answers with an option's index; the laptop's counts and aliases carry
-`version × options + index`, its tally also says how many phones were `dealt`
-each version, and the tablet's counts are labelled "name: option". A phone
-should send its `voter` id with `audience-join`, so that a reload brings back
-the same version. `client/ask.html` and `presenter-polls.js` don't build or
-show versions yet; the PH226 course pages (`ask.js`, `master.js`) do.
+**Versions.** A single-pick choice poll may come in two to four versions: an
+experiment in which each phone sees one version and the versions' answers are
+compared, as Knobe ran his two stories of the chairman. Give the `<live-poll>`
+a `<template>` per version, each with `data-version` (a name, for the laptop
+and the tablet only), `data-prompt` (its question) and the story as its
+content (plain text, up to 1200 characters):
 
-**Reset** (relay protocol only, for now). The tablet may send `reset` with
-the questions key, to start the lecture again from a clean state (after a
-rehearsal, say): the relay forgets that channel's polls, their answers and
-the versions it dealt, the board and "Lost?", and opens again, empty, any
-poll open at the time. Each poll the phones are sent carries a `round`, new
-whenever the relay has forgotten the poll's answers, so a phone remembers
-its answer by poll and round and never shows one the relay no longer has.
-`client/presenter.html` has no Reset button yet; the PH226 iPad page does.
+```html
+<live-poll name="chairman" options="Yes|No" instructions="Read the story, then answer.">
+  <template data-version="Harm" data-prompt="Did the chairman harm the environment intentionally?">The vice-president …</template>
+  <template data-version="Help" data-prompt="Did the chairman help the environment intentionally?">The vice-president …</template>
+</live-poll>
+<poll-results poll="chairman" share="Yes" reference="82|23" reference-label="Knobe"></poll-results>
+```
 
-**Driving** (relay protocol only, for now). The tablet may send `driver`
-with the questions key: strokes for the deck's chalkboard plugin (its pen,
-on the slide, and its chalkboard, which it may scroll) and steps back and
-forward or in any of reveal's four directions, which the relay
-checks against a short list and passes to the laptop's copy alone, telling
-the tablet whether it drew them. The PH226 iPad page's Drive button uses it,
-to write on the projector with an Apple Pencil.
+The relay deals the versions out in turn as each phone is first sent the poll
+(those already joined, in the order they joined, then late arrivals), so each
+is seen by as many phones as the others, give or take one. It keeps which
+phone has which with the poll, so a reload brings back the same one, and sends
+a phone only its own story and question, which the phone shows above the
+options. The tablet's counts read "Harm: Yes 12 · Harm: No 3 · …", and the
+chart has a column per version. The screen can't show either story while the
+poll is open, so its slide should be neutral.
 
-**Ink** (relay protocol only, for now). The other way: the laptop sends `ink`,
-each thing drawn on its deck as it is drawn, and, when the tablet asks
-(`ink-want`, with the questions key), `ink-slide`, the slide's drawings so
-far, in parts; the relay checks them as it does Drive's and passes them to
-the questions room alone. The PH226 iPad page uses them so that its current
-slide shows what the projector does. For the same reason the tablet gets
-each poll's tally as the laptop does (and may ask for one with the key), so
-that its copies of the deck can draw the laptop's charts.
+**Reset.** The tablet's **Reset** starts the talk again from a clean state
+(after a rehearsal, say): the relay forgets that channel's polls, their
+answers and the versions it dealt, the board and "Lost?", and opens again,
+empty, any poll open at the time. The laptop's charts and pill go back to
+empty, and the tablet clears its screen. Each poll the phones are sent
+carries a `round`, new whenever the relay has forgotten the poll's answers (a
+reset or a restart), so a phone remembers its answer by poll and round and
+never shows one the relay no longer has.
 
 ### The pill, the board, reactions and "Lost?"
 
@@ -327,21 +392,21 @@ that its copies of the deck can draw the laptop's charts.
 - **The board.** Each question on the tablet has a **Share** button. A shared
   question goes, without any name, to every phone ("Questions from the
   room"), where each phone may vote for it once, and to any
-  `<div class="qa-board" data-top="5"></div>` on the laptop's slides, most
-  votes first. **Answered** on the tablet takes it down. No question reaches
+  `<qa-board top="5"></qa-board>` on the laptop's slides, most votes first. **Answered** on the tablet takes it down. No question reaches
   the board unless you share it.
 - **Reactions.** `PresenterConfig.reactions` (up to 8 emoji; none by default)
   puts reaction buttons at the foot of the ask page. Each tap floats up the
   right of the laptop's screen, and the tablet tallies the last minute's.
-- **"Lost?"** A toggle on the phones (on unless `PresenterConfig.pace` is
-  `false`): the tablet alone shows "Lost: 3 of 41", counted over the last two
+- **"Lost?"** A toggle on the phones (off unless `PresenterConfig.pace` is
+  `true`): the tablet alone shows "Lost: 3 of 41", counted over the last two
   minutes, red from 15%.
 
 ### What is kept
 
 The relay keeps, in memory only and for three hours: each phone's current
-answer to each poll, under its random id; the questions you share, without
-names, with their votes. Nothing is written to disk or logged. The laptop
+answer to each poll, under its random id (and, for a poll in versions, which
+version it was dealt); the questions you share, without names, with their
+votes. The tablet's Reset forgets all of it for its channel at once. Nothing is written to disk or logged. The laptop
 receives answers under aliases, never the phones' ids, and a word cloud's
 words only once shown. Questions themselves are still never kept.
 
@@ -351,7 +416,10 @@ The charts take their colours from the reveal.js theme (its link, text and
 background colours). To change them, set these on `.reveal` in your deck's
 CSS: `--poll-accent` (bars and borders), `--poll-text`, `--poll-card` (the
 overlay's card and the pill), `--poll-highlight` (right answers, winners,
-marks) and `--poll-colour-1` to `--poll-colour-8` (word clouds, flows, grids).
+marks) and `--poll-colour-1` to `--poll-colour-8` (word clouds, flows,
+versions). A grid's items take hues of their own, much further apart, since
+any two may land side by side: `--poll-grid-colour-1` to `-8`, with
+`--poll-grid-ink-1` to `-8` for the number drawn on each.
 
 ### Libraries
 
@@ -361,6 +429,49 @@ components (free, MIT), and the laptop lays out word clouds with
 by a deck with a word cloud. Both come from jsDelivr by default, at pinned
 versions; `PresenterConfig.webAwesome` and `d3Cloud` point elsewhere, such as
 copies on your own site.
+
+## Drive, and the laptop's writing on the tablet
+
+With questions on, and the chalkboard plugin from `client/vendor/chalkboard`
+in the deck, the tablet's **Drive** button makes it the laptop's pen:
+
+- The current slide fills the screen, with a row of tools under it: the pen
+  (writing on the slide) or the board (the plugin's chalkboard, which a finger
+  drags up and down, a flick carrying it on), the deck's colours, an eraser,
+  Clear, and ◀ ▶.
+- An Apple Pencil writes; once it has touched the screen, only the Pencil
+  writes, so a resting palm never does (a finger writes before that). Each
+  stroke is drawn at once on the tablet's copy and sent through the relay to
+  the laptop, which hands it to the plugin as one of the plugin's own
+  messages, so it behaves exactly as writing done there: it belongs to its
+  slide, stays through its fragments, goes with the next slide and is back on
+  returning.
+- The copy's own controls work in Drive (only a tap: a palm presses nothing):
+  reveal's arrows, the toolbar, the question button, and in the overview a
+  tap on a slide goes there. The board opened or closed on the laptop itself
+  switches Drive between Board and Pen.
+- A batch of strokes goes once the one before is answered and is sent again
+  until it is; one made on a slide the laptop has since left is not drawn
+  there. The plugin clears a slide 100 ms after arriving on it (its
+  `transition`), so writing begun then waits that long.
+
+Without the plugin in the deck, Drive still steps through the talk, and says
+why it has no pen.
+
+The other way, whether or not you are driving, the tablet's current slide
+shows what is written on the laptop: each stroke as it is drawn there (`ink`),
+and the slide's drawings so far (`ink-slide`, in parts) whenever the tablet
+arrives on a slide, loads or reconnects, or the laptop's page does. The
+chalkboard, open or closed, scrolled, as a whiteboard or without its grid,
+follows the laptop too, and so does the pen's palette.
+
+The chalkboard plugin is rajgoel's, changed for this (its
+[README](client/vendor/chalkboard/README.md) says how): writing belongs to a
+slide rather than each fragment step (`perFragment: true` for the old way);
+the chalkboard scrolls down without end; `W` makes it a whiteboard and `R`
+hides its grid; `E` saves every chalkboard of the talk as one PDF; and a
+following copy can be given a slide's drawings (`slideDrawings()`,
+`setSlideDrawings()`, `slideTime()`, `boardOpen()`).
 
 ## Settings
 
@@ -377,14 +488,18 @@ All in `presenter-config.js`, which is public: it holds no secret.
 | `askUrl` | The public address of `ask.html`, for the QR code |
 | `qrStudio`, `qrOptions` | Where the QR library is loaded from, and its options |
 | `reactions` | Up to 8 emoji for the ask page (a list, or a string separated by spaces); none by default |
-| `pace` | `false` hides "Lost?" |
+| `pace` | `true` adds "Lost?" (off by default) |
 | `pollPill`, `pollPillPosition` | The pill's text and place (above) |
 | `polls` | `false`: a `?master` deck loads no poll support |
 | `pollsScript`, `pollsStyle` | Where `presenter-polls.js` and `.css` are loaded from (default: beside `presenter-master.js`) |
+| `drive` | `false`: a `?master` deck loads no Drive or ink support |
+| `driveScript` | Where `presenter-drive.js` is loaded from (default: beside `presenter-master.js`) |
+| `questionButton`, `questionButtonIcon` | `false` leaves out the customcontrols button that hides and shows the QR codes; its icon, as HTML |
 | `webAwesome` | Web Awesome's `dist-cdn` directory (default: 3.14.0 on jsDelivr) |
 | `d3Cloud` | d3-cloud's `d3.layout.cloud.js` (default: 1.2.9 on jsDelivr) |
 | `heartbeatMs` | How often the laptop re-broadcasts its position (3000) |
-| `hideInFrames` | Selectors hidden in the tablet's copies of the deck |
+| `hideInFrames` | Selectors hidden in both the tablet's copies of the deck (default: the menu plugin's panel) |
+| `hideInNext` | Selectors hidden in the next slide's copy alone (default: the menu's button, customcontrols, the chalkboard's handle and palettes) |
 | `deckUrl` | Maps the path a deck announces to the URL the tablet loads |
 | `deck` | The Reveal instance, for an ES-module setup with no global `Reveal` |
 
@@ -433,10 +548,16 @@ node tools/polls-test.js         # polls, through the pages
 node tools/relay-test.js         # the relay's later events, at the socket level
 node tools/driver-test.js        # the tablet driving the laptop's deck, at the socket level
 node tools/ink-test.js           # the laptop's ink, to the tablet, at the socket level
+node tools/laptop-test.js        # the laptop's script: inert copies, the mirror, Drive's strokes
+node tools/tablet-test.js        # the tablet page: copies, Drive, ink, Reset, Reload
+node tools/drive-ink-test.js     # the tablet and the real laptop page, together
+node tools/ask-test.js           # the ask page: versions, rounds, exclusive picks, points, words
+node tools/chalkboard-test.js    # the chalkboard plugin's changes (no relay)
 ```
 
-Each test starts the relay and, but for `relay-test.js`, a local web server.
-They need the internet, for reveal.js, Web Awesome and d3-cloud from jsDelivr.
+Each test but `chalkboard-test.js` starts the relay, and each but
+`relay-test.js` a local web server. They need the internet, for reveal.js,
+Font Awesome, Web Awesome and d3-cloud from CDNs.
 
 `e2e-test.js` drives a "laptop" and a "tablet" through the demo deck in
 landscape and portrait, and checks:
@@ -468,16 +589,24 @@ and three phones on the ask page, each in a browser of its own, through the
 - that answers reach the laptop's charts (bars, columns with median and mean,
   the voting rules, the beauty contest, before and after) and the tablet's
   count;
-- that the overlay is a step only on the laptop, and the tablet is sent the
-  position without it;
-- that a word cloud's words wait for the tablet, and reach the laptop's cloud
-  once shown;
+- that the overlay is a step only on the laptop and the tablet's mirroring
+  copies, and the position is sent without it, the laptop's own index besides;
+- that a moderated word cloud's words wait for the tablet, and reach the
+  laptop's cloud once shown;
 - the board (share, vote, take down), reactions and "Lost?";
 - that no page logs an error.
 
 `relay-test.js` checks the relay's later events directly: the wide number
 poll, the self-others, points, grid and pin polls, the tablet's poll counts,
-the word filter, the board, reactions and the pace signal.
+the word filter, the board, reactions, the pace signal and an exclusive
+option. `driver-test.js` and `ink-test.js` do the same for Drive and ink.
+
+`laptop-test.js`, `tablet-test.js`, `drive-ink-test.js` and `ask-test.js` take
+each side through what it gained on 10 November 2026 (see `CLAUDE.md`), the
+tablet in landscape and portrait, a Pencil and a palm emulated with pointer
+events; `chalkboard-test.js` writes, scrolls, saves and switches the
+chalkboard with the mouse and keys, as the laptop's user would.
+
 Environment variables:
 - `RELAY_URL` tests against an existing relay.
 - `REVEAL_VERSION` swaps the reveal.js version.
@@ -509,36 +638,49 @@ or the demo deck looks.
 
 ## Limitations
 
-- **One-way.** The tablet follows the laptop; it can't advance the slides.
-  Use a clicker or the keyboard.
-- **Position only.** Chalkboard drawings, video playback, and anything typed
-  or clicked inside a slide are not mirrored. The tablet's copies are muted
-  and non-interactive.
+- **Driving needs questions on.** The tablet can advance the slides and write
+  on them only in Drive, which needs the questions key (and, for writing, the
+  vendored chalkboard plugin in the deck). Otherwise it follows the laptop; use
+  a clicker or the keyboard.
+- **The position, the writing and the charts.** The tablet's copies show the
+  laptop's position, what is written with the chalkboard plugin, and what the
+  presenter's own scripts draw. Video playback, other plugins' state, and
+  anything typed or clicked inside a slide are not mirrored. The copies are
+  muted, and take no taps outside Drive.
 - **Same origin.** The presenter page must be served from the same site as the
   decks, and each deck must expose `window.Reveal`.
 - **A second load.** The tablet loads each deck twice, which is noticeable for
   very heavy decks on older tablets.
 - **Tested with reveal.js 5 and 6.** reveal.js 4 has the same API and should
   work, but hasn't been tested.
-- **Polls draw only on the laptop.** An inline chart is an empty space in the
-  published deck and on the tablet. Polls need audience questions on, since
-  phones join with the day's code.
+- **Polls draw only on the laptop and the tablet.** An inline chart is an
+  empty space in the published deck. Polls need audience questions on, since
+  phones join with the code.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `client/presenter-master.js` | Laptop side: inert unless `?master=<secret>` |
-| `client/presenter-polls.js`, `presenter-polls.css` | Laptop side of polls, the board and reactions; loaded by `presenter-master.js` only with `?master` |
-| `client/presenter.html` | Tablet side: the presenter view, incoming questions, word approval, poll counts, the board, "Lost?" and reactions |
+| `client/presenter-master.js` | Laptop side: inert unless `?master=<secret>`, or a mirror in the tablet's copies (`?presenter`) |
+| `client/presenter-polls.js`, `presenter-polls.css` | Laptop side of polls, the board and reactions; loaded by `presenter-master.js` only with `?master`, or in a mirror |
+| `client/presenter-drive.js` | Laptop side of Drive and ink: applies the tablet's strokes and steps, sends what is written; loaded only with `?master` |
+| `client/presenter.html` | Tablet side: the presenter view, incoming questions, word approval, poll counts, the board, "Lost?", reactions, Reset and Reload |
+| `client/presenter-driver.js`, `presenter-ink.js`, `presenter-mirror.js` | Tablet side of Drive, of the laptop's writing, and of what its copies draw as mirrors |
 | `client/ask.html` | The audience's page: questions, live polls, the board, reactions and "Lost?" |
 | `client/presenter-config.example.js` | The shared, public settings: relay URL, channel id, options |
 | `server/relay.js` | The relay, plus `deploy/` for systemd and nginx |
 | `tools/make-channel.js` | Makes a secret and its channel id |
 | `client/vendor/qr-studio.js` | QR Studio, vendored, for the laptop's QR code |
+| `client/vendor/chalkboard/` | rajgoel's chalkboard plugin (MIT), changed for Drive and ink; its README says how |
 | `tools/e2e-test.js` | End-to-end test (puppeteer) |
 | `tools/polls-test.js` | Polls end to end: laptop, tablet and three phones |
 | `tools/relay-test.js` | The relay's later events at the socket level: the wider poll kinds, the word filter, the board, reactions, the pace signal |
+| `tools/driver-test.js`, `ink-test.js` | Drive and ink at the socket level |
+| `tools/laptop-test.js` | The laptop's script: inert copies, the mirror, the position's extra fields, Drive's strokes and steps |
+| `tools/tablet-test.js` | The tablet page against a stand-in laptop: copies, Drive, ink, Reset, Reload, in both orientations |
+| `tools/drive-ink-test.js` | The tablet and the real laptop page together: Drive, ink and the mirror |
+| `tools/ask-test.js` | The ask page: versions, rounds, exclusive picks, points, words |
+| `tools/chalkboard-test.js` | The chalkboard plugin's changes, with the mouse and keys |
 | `tools/make-demo-gif.js` | Makes `docs/demo.gif` |
-| `example/index.html` | A demo deck; its presenter-specific lines are two `<script>` tags, the question code and QR slide, and empty elements for the polls, their charts and the board |
+| `example/index.html` | A demo deck; its presenter-specific lines are two `<script>` tags (and the chalkboard plugin), the question code and QR slide, and empty elements for the polls, their charts and the board |
 | `CLAUDE.md` | Integration playbook for a Claude Code agent |

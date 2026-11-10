@@ -3,8 +3,9 @@
 	reveal.js-presenter — the audience's page: a question for the presenter's
 	tablet (presenter.html), and the live polls, through the relay.
 
-	A question goes through only with the 4-digit code shown on a slide (it
-	changes daily), and only while the presenter's tablet is listening; it is
+	A question goes through only with the 4-digit code shown on a slide (the
+	day's, which changes daily, or one the deck fixes with code= on its
+	<question-qr>), and only while the presenter's tablet is listening; it is
 	never stored.  ?code=1234, as in the laptop's QR code, fills in the code and
 	hides its field; the field comes back if the relay refuses the code.
 
@@ -14,9 +15,12 @@
 	slider, or a field to type in, for a wider number range; a rating per
 	statement (scale); accept or reject per statement (premises); options
 	tapped in order (ranking); words to add (a word cloud, shown on the screen
-	once the presenter approves them); your own answer and a guess at the
-	room's (self-others); points to share out; a square to tap per item
-	(grid); a picture to tap (pin).  An answer can be changed while the poll is
+	at once, but for any the relay's word filter catches, which wait for the
+	presenter, unless the deck holds every word for approval); your own answer
+	and a guess at the room's (self-others); points to share out; a square to
+	tap per item (grid); a picture to tap (pin); or, for a poll in versions
+	(an experiment: each phone dealt one by the relay, in turn), this phone's
+	story above its question.  An answer can be changed while the poll is
 	open; the phone counts once, by a random id kept in its localStorage.
 	Below the question form are the questions the presenter has shared from
 	the tablet, to vote on; at the foot, when the deck offers them, reactions
@@ -123,6 +127,7 @@
 		#form-heading { font-size: 20px; margin: 20px 0 0; }
 		.poll { margin: 4px 0 20px; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--field); }
 		.poll h2 { font-size: 20px; margin: 0 0 14px; }
+		.poll-story { margin: 0 0 16px; padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--bg); font-size: 17px; line-height: 1.5; }
 		.poll-options { display: grid; gap: 8px; }
 		.poll-options.numbers { grid-template-columns: repeat(auto-fill, minmax(4.2em, 1fr)); }
 		.poll button { margin-top: 0; }
@@ -217,6 +222,7 @@
 		</div>
 
 		<section id="poll" class="poll" hidden>
+			<p id="poll-story" class="poll-story" hidden></p>
 			<h2 id="poll-prompt"></h2>
 			<div id="poll-options" class="poll-options"></div>
 			<div id="poll-slider" class="poll-slider" hidden>
@@ -329,31 +335,52 @@
 			return v + (!u ? '' : /^[A-Za-z]/.test(u) ? ' ' + u : u);
 		};
 
-		// Answers given in this tab, so a reload still shows them.
-		const answered = id => { try { return JSON.parse(sessionStorage.getItem('ask-poll:' + id)); } catch (e) { return null; } };
-		const remember = (id, value) => { try { sessionStorage.setItem('ask-poll:' + id, JSON.stringify(value)); } catch (e) { /* storage blocked */ } };
+		// Answers given in this tab, so a reload still shows them: by the poll and
+		// its round, which the relay changes whenever it has forgotten the poll's
+		// answers (a reset from the tablet, or a restart), so that none is shown
+		// as "in" that the relay no longer has.
+		const memoryOf = def => 'ask-poll:' + def.id + (def.round ? ':' + def.round : '');
+		const answered = def => { try { return JSON.parse(sessionStorage.getItem(memoryOf(def))); } catch (e) { return null; } };
+		const remember = (def, value) => { try { sessionStorage.setItem(memoryOf(def), JSON.stringify(value)); } catch (e) { /* storage blocked */ } };
 
 		let poll = null, asking = false, joinTimer = null;
 		const QUESTION_PAGE = { title: document.title, heading: $('heading').textContent, lead: $('lead').textContent };
 
-		// Join the audience, to be sent polls.  It takes the day's code; before
-		// the laptop has opened questions, keep trying.
+		// Join the audience, to be sent polls.  It takes the code; before the
+		// laptop has opened questions, keep trying.  Joining again is harmless,
+		// and its reply carries the poll open now, so it is also how the page
+		// checks its connection: every few seconds while it is in view, and
+		// whenever it comes back into view (a phone unlocked, say).  A
+		// connection can die without a word, and socket.io's own heartbeat
+		// notices only after 45 s, during which no poll would arrive; no reply
+		// means start a new one.
+		const REPLY_MS = 5000;
 		function join() {
 			clearTimeout(joinTimer);
 			if (!socket || !socket.connected || !/^\d{4}$/.test($('code').value)) return;
-			socket.timeout(10000).emit('audience-join', { channel: config.channel, code: $('code').value }, (err, res) => {
-				if (!err && res && res.ok) {
+			// The phone's id goes too: a poll in versions is dealt by it, so that
+			// a reload brings back the same version.
+			socket.timeout(REPLY_MS).emit('audience-join', { channel: config.channel, code: $('code').value, voter }, (err, res) => {
+				if (err) {
+					if (socket.connected) socket.disconnect().connect();		// its 'connect' joins again
+				}
+				else if (res && res.ok) {
 					showPoll(res.poll);
 					if (res.board) showBoard(res.board);
 					showAudience(res.audience);
 				}
-				else if (!err && res && res.reason === 'code') {
+				else if (res && res.reason === 'code') {
 					$('code-field').hidden = false;
 					status(MESSAGES.code, 'bad');
 				}
-				else joinTimer = setTimeout(join, 15000);
+				else joinTimer = setTimeout(join, REPLY_MS);
 			});
 		}
+		const inView = () => document.visibilityState === 'visible';
+		setInterval(() => { if (inView()) join(); }, 2 * REPLY_MS);
+		document.addEventListener('visibilitychange', () => { if (inView()) join(); });
+		window.addEventListener('pageshow', join);
+		window.addEventListener('online', join);
 
 		// The kinds (see the relay): choice (one pick, or several with picks),
 		// number, scale, premises, ranking, words, self-others, points, grid and
@@ -378,12 +405,14 @@
 
 		function defaultInstructions(def) {
 			switch (def.kind) {
-			case 'choice': return (def.picks ? `Choose up to ${def.picks}, then press Send.` : 'Tap your answer.') + SUFFIX;
+			case 'choice': return (!def.picks ? 'Tap your answer.'
+				: Number.isInteger(def.exclusive) ? `Choose up to ${def.picks}, or “${def.options[def.exclusive]}” on its own, then press Send.`
+				: `Choose up to ${def.picks}, then press Send.`) + SUFFIX;
 			case 'number': return (numberButtons(def) ? 'Tap your answer.' : numberField(def) ? 'Type your answer, then press Send.' : 'Choose your answer, then press Send.') + SUFFIX;
 			case 'scale': return 'Rate each statement, then press Send.' + SUFFIX;
 			case 'premises': return `${def.labels[0]} or ${def.labels[1].toLowerCase()} each statement, then press Send.` + SUFFIX;
 			case 'ranking': return 'Tap the options in order, your first choice first, then press Send.' + SUFFIX;
-			case 'words': return (def.entries > 1 ? `Type up to ${def.entries} words or short phrases.` : 'Type a word or short phrase.')
+			case 'words': return (def.entries > 1 ? `Type up to ${def.entries} words.` : 'Type a word.')
 				+ (def.moderated ? '  They appear on the screen once the presenter has approved them.' : '  They appear on the screen straight away.');
 			case 'self-others': return 'Answer for yourself, then guess how the room answered, and press Send.' + SUFFIX;
 			case 'points': return (def.unit === '%' || (!def.unit && def.total === 100) ? 'Share out 100% among the options' : `Share ${def.total} ${def.unit || 'points'} among the options`)
@@ -395,7 +424,7 @@
 		}
 
 		function showPoll(def) {
-			const same = def && poll && def.id === poll.id;
+			const same = def && poll && def.id === poll.id && def.round === poll.round;
 			poll = def || null;
 			$('poll').hidden = !poll;
 			$('form').hidden = !!poll && !asking;
@@ -415,8 +444,11 @@
 			$('lead').textContent = poll.instructions || defaultInstructions(poll);		// from the slide's data-instructions
 			if (same) return;
 			$('poll-prompt').textContent = poll.prompt || 'Poll';
+			// A poll in versions: the story this phone was dealt, to read first.
+			$('poll-story').textContent = poll.story || '';
+			$('poll-story').hidden = !poll.story;
 			pollStatus('');
-			const chosen = answered(poll.id);
+			const chosen = answered(poll);
 			const options = $('poll-options');
 			options.replaceChildren();
 			options.className = 'poll-options';
@@ -456,9 +488,16 @@
 			draft = new Set(Array.isArray(chosen) ? chosen : []);
 			const group = wa('checkbox-group', { 'aria-label': def.prompt });
 			group.id = 'poll-checks';
+			const boxes = [];
+			// An exclusive option ("None of them") stands alone: ticking it unticks
+			// the rest, and ticking any other unticks it.
+			const exclusive = Number.isInteger(def.exclusive) ? def.exclusive : -1;
+			const untick = which => boxes.forEach((b, k) => { if (which(k) && b.checked) { b.checked = false; draft.delete(k); } });
 			def.options.forEach((label, value) => {
 				const box = wa('checkbox', { value, checked: draft.has(value), size: 'l' }, label);
+				boxes.push(box);
 				box.addEventListener('change', () => {
+					if (box.checked && exclusive >= 0) untick(k => value === exclusive ? k !== value : k === exclusive);
 					if (box.checked && draft.size >= def.picks) {
 						box.checked = false;
 						return pollStatus(`You can choose up to ${def.picks}.  Untick one first.`, 'bad');
@@ -580,10 +619,14 @@
 		// change is sent at once.
 		function showWords(def, chosen) {
 			draft = Array.isArray(chosen) ? [...chosen] : [];
+			// Each word is an entry of its own: a space, comma or semicolon ends one
+			// as it is typed (or pasted), as return does, so "action intention aim"
+			// is three words, not one phrase.  At the limit the text box goes, so
+			// further words can't be typed (the hint gives the limit).
 			const tags = wa('tag-input', {
-				'max-tags': def.entries, delimiter: '', 'aria-label': def.prompt, enterkeyhint: 'done', autocapitalize: 'off',
-				placeholder: def.entries > 1 ? 'Type one, then tap return' : 'Type it, then tap return',
-				hint: def.entries > 1 ? `Up to ${def.entries}, 30 characters each.` : 'Up to 30 characters.'
+				'max-tags': def.entries, delimiter: ' ,;', 'aria-label': def.prompt, enterkeyhint: 'done', autocapitalize: 'off',
+				placeholder: def.entries > 1 ? 'Type your words' : 'Type your word',
+				hint: def.entries > 1 ? `Up to ${def.entries} words, 30 characters each.` : 'One word, up to 30 characters.'
 			});
 			tags.id = 'poll-tags';
 			customElements.whenDefined('wa-tag-input').then(() => { tags.value = [...draft]; });
@@ -626,8 +669,10 @@
 			$('poll-submit').hidden = false;
 		}
 
-		// Points: a slider per option; Send once they add up to the total.
-		// "Make it add up" scales what has been given so far to the total.
+		// Points: a slider per option; Send once they add up to the total.  A
+		// slider stops where the total would be passed, so one dragged all the
+		// way gives exactly what is left.  "Make it add up" scales what has been
+		// given so far to the total.
 		const pointsUnit = def => def.unit || (def.total === 100 ? '%' : '');
 		function showPoints(def, chosen) {
 			draft = Array.isArray(chosen) && chosen.length === def.options.length ? [...chosen] : def.options.map(() => 0);
@@ -639,7 +684,11 @@
 				slider.dataset.item = k;
 				const out = el('output', '', withUnit(draft[k], pointsUnit(def)));
 				out.dataset.item = k;
-				slider.addEventListener('input', () => { draft[k] = Number(slider.value); out.textContent = withUnit(draft[k], pointsUnit(def)); refresh(); });
+				slider.addEventListener('input', () => {
+					const room = def.total - draft.reduce((sum, v, j) => j === k ? sum : sum + v, 0);
+					if (Number(slider.value) > room) slider.value = room;
+					draft[k] = Number(slider.value); out.textContent = withUnit(draft[k], pointsUnit(def)); refresh();
+				});
 				row.append(slider, out);
 				item.append(row);
 				$('poll-body').append(item);
@@ -794,13 +843,13 @@
 			clearTimeout(pending);
 			if (wait > 0) { pending = setTimeout(() => answer(value), wait); return; }
 			lastSent = Date.now();
-			const id = poll.id;
+			const sent = poll, id = poll.id;
 			pollStatus('Sending…');
 			socket.timeout(10000).emit('poll-answer', { channel: config.channel, code: $('code').value, id, value, voter }, (err, res) => {
 				if (err) return pollStatus('No reply.  Please try again.', 'bad');
 				if (res && res.ok) {
-					remember(id, value);
-					if (poll && poll.id === id) {
+					remember(sent, value);
+					if (poll && poll.id === id && poll.round === sent.round) {
 						if (!Array.isArray(value)) $('poll-options').querySelectorAll('button').forEach(b => pressed(b, Number(b.dataset.value) === value));
 						pollStatus(poll.kind !== 'words' ? 'Thanks!  You can change your answer until the poll closes.'
 							: !value.length ? 'Your words are withdrawn.'
@@ -822,12 +871,16 @@
 		// for everyone to vote on (one vote each, which can be taken back).
 		// Shown with the question form.  This phone remembers which it voted for.
 		let boardItems = [];
+		let boardShown = '';		// what the list shows, so that a repeated join redraws nothing
 		let myVotes = new Set();
 		try { myVotes = new Set(JSON.parse(localStorage.getItem('ask-board-votes') || '[]')); } catch (e) { /* storage blocked */ }
 		const saveVotes = () => { try { localStorage.setItem('ask-board-votes', JSON.stringify([...myVotes])); } catch (e) { /* storage blocked */ } };
 		function showBoard(b) {
 			if (!b || !Array.isArray(b.items)) return;
 			boardItems = b.items;
+			const shown = JSON.stringify([boardItems, [...myVotes]]);
+			if (shown === boardShown) return;
+			boardShown = shown;
 			$('board-list').replaceChildren(...boardItems.map(item => {
 				const li = el('li');
 				const mine = myVotes.has(item.id);
@@ -857,9 +910,11 @@
 		// foot of the page.  A reaction floats up the laptop's screen; "Lost?"
 		// goes only to the presenter's tablet, as a count, and lapses after a
 		// couple of minutes.
-		let paceTimer = null;
+		let paceTimer = null, audienceShown = '';
 		function showAudience(a) {
 			if (!a || !Array.isArray(a.reactions)) return;
+			if (JSON.stringify(a) === audienceShown) return;		// a repeated join: nothing new
+			audienceShown = JSON.stringify(a);
 			$('reactions').replaceChildren(...a.reactions.map(emoji => {
 				const b = button(emoji, () => react(b, emoji), 'react');
 				b.setAttribute('aria-label', 'React with ' + emoji);
@@ -900,7 +955,11 @@
 		const script = document.createElement('script');
 		script.src = config.relay.replace(/\/+$/, '') + '/socket.io/socket.io.js';
 		script.onload = () => {
-			socket = io(config.relay.replace(/\/+$/, ''));
+			// A WebSocket first, which is always a new connection: socket.io's
+			// default starts with HTTP requests, which reuse the browser's last
+			// connection to the relay, dead if the WebSocket's was.  Plain HTTP if
+			// a WebSocket can't be had.
+			socket = io(config.relay.replace(/\/+$/, ''), { transports: ['websocket', 'polling'], tryAllTransports: true });
 			socket.on('connect', () => { status(''); ready(); join(); });
 			socket.on('poll', showPoll);
 			socket.on('board', showBoard);

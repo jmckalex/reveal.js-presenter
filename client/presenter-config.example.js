@@ -19,10 +19,12 @@ window.PresenterConfig = {
 	// questionsKey: 'REPLACE-WITH-THE-KEY-HASH',
 
 	// Optional, with questionsKey.  The public address of ask.html.  The laptop
-	// then draws a QR code for it, with today's code filled in, into any element
-	// with class "question-qr".  qrStudio overrides where the QR library is
-	// loaded from (default: vendor/qr-studio.js next to presenter-master.js), and
-	// qrOptions is passed to it (e.g. { foreground: '#604e25' }).
+	// then draws a QR code for it, with today's code filled in, into any
+	// <question-qr></question-qr> (or element with class "question-qr"),
+	// captioned with its short-url or text ("Ask a question" by default).
+	// qrStudio overrides where the QR library is loaded from (default:
+	// vendor/qr-studio.js next to presenter-master.js), and qrOptions is passed
+	// to it (e.g. { foreground: '#604e25' }, which colours the caption too).
 	// askUrl: 'https://your.site/presenter/ask.html',
 	// qrStudio: '/path/to/qr-studio.js',
 	// qrOptions: { moduleStyle: 'smooth' },
@@ -30,10 +32,10 @@ window.PresenterConfig = {
 	// Optional, with questionsKey: what the ask page offers besides questions.
 	// reactions: up to 8 emoji (a list, or one string separated by spaces),
 	// which float up the laptop's screen and are tallied on the tablet; none by
-	// default.  pace: false hides the "Lost?" toggle, whose count only the
-	// tablet sees; it is on by default.
+	// default.  pace: true adds the "Lost?" toggle, whose count only the tablet
+	// sees; it is off by default.
 	// reactions: ['👍', '❤️', '😂', '🤯'],
-	// pace: false,
+	// pace: true,
 
 	// Optional, with questionsKey: live polls (presenter-polls.js).  A ?master
 	// deck loads presenter-polls.js and presenter-polls.css from beside
@@ -60,14 +62,39 @@ window.PresenterConfig = {
 	// webAwesome: 'https://cdn.jsdelivr.net/npm/@awesome.me/webawesome@3.14.0/dist-cdn',
 	// d3Cloud: 'https://cdn.jsdelivr.net/npm/d3-cloud@1.2.9/build/d3.layout.cloud.js',
 
+	// Optional, with questionsKey: Drive, the tablet writing on the laptop's
+	// slides and stepping through them, and the laptop's writing shown on the
+	// tablet.  A ?master deck loads presenter-drive.js from beside
+	// presenter-master.js, or from driveScript; drive: false leaves it out.
+	// The writing needs the chalkboard plugin in vendor/chalkboard (rajgoel's,
+	// changed for this); without it, the tablet's ◀ ▶ still work.
+	// drive: false,
+	// driveScript: '/path/to/presenter-drive.js',
+
+	// Optional.  A button on the deck's customcontrols toolbar (if it has one)
+	// that hides and shows the question QR code in the ?master deck, and is
+	// shown, as the laptop's is, in the tablet's copies.  Elsewhere it appears
+	// only where the secret is in the config (the server-side variant in
+	// CLAUDE.md), on localhost or in a browser that has opened a deck with
+	// ?master or holds the questions key, and reopens the deck with ?master.
+	// questionButton: false leaves it out; questionButtonIcon is its icon, as
+	// HTML (default: a small speech bubble, drawn inline).
+	// questionButton: false,
+	// questionButtonIcon: '<i class="fa-solid fa-comment"></i>',
+
 	// Optional.  How often (ms) the laptop re-broadcasts an unchanged position,
 	// so a presenter view that reconnects catches up.  Default 3000.
 	// heartbeatMs: 3000,
 
 	// Optional.  Selectors hidden inside the presenter's copies of the deck, for
-	// plugin UI that Reveal.configure() cannot switch off.  The default covers
-	// the menu, chalkboard and customcontrols plugins.
-	// hideInFrames: '.slide-menu-button, .slide-menu-wrapper, #customcontrols',
+	// plugin UI that Reveal.configure() cannot switch off.  The current slide
+	// shows what the projector does, the deck's own controls included, so
+	// hideInFrames (both copies) hides only what never belongs there: by default
+	// the menu plugin's open panel.  hideInNext hides more on the next slide
+	// alone, which shows the slide and nothing else: by default the menu's
+	// button, customcontrols' toolbar, and the chalkboard's handle and palettes.
+	// hideInFrames: '.slide-menu-wrapper',
+	// hideInNext: '.slide-menu-button, #customcontrols, div.boardhandle, div.palette, .chalkboard-button, .board-button, #nextboard, #previousboard',
 
 	// Optional.  Maps the path a deck announces to the URL the presenter page
 	// should load.  Needed only when the laptop serves decks under different

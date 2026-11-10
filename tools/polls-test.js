@@ -81,7 +81,7 @@ const until = (page, fn, arg, timeout = 15000) =>
 	const sitePort = await freePort();
 	const SITE = `http://127.0.0.1:${sitePort}`;
 	const config = 'window.PresenterConfig = ' + JSON.stringify({
-		relay: relayUrl, channel, questionsKey: questionsKeyHash, askUrl: SITE + '/client/ask.html', reactions: REACTIONS
+		relay: relayUrl, channel, questionsKey: questionsKeyHash, askUrl: SITE + '/client/ask.html', reactions: REACTIONS, pace: true
 	}) + ';';
 	const site = http.createServer((req, res) => {
 		const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -234,8 +234,11 @@ const until = (page, fn, arg, timeout = 15000) =>
 	});
 	check(overlay.current && J(overlay.counts) === '["1","2","0"]' && overlay.prompt === 'Tea or coffee?' && overlay.pillHidden,
 		'the overlay comes up as a step of its own, with the prompt and the counts, and the pill gives way', overlay);
-	// The tablet's copy has no such step: it is sent the position without it.
+	// The position is sent without that step, which no ordinary copy of the
+	// deck has; the laptop's own index comes besides (screen.indexf), and the
+	// tablet's copies, which mirror the laptop and so have the step, take it.
 	const h = await laptop.evaluate(() => Reveal.getIndices(document.getElementById('poll-choice')).h);
+	const sent = () => tablet.evaluate(() => { const v = window.PresenterView || {}; return { indexf: v.state && v.state.indexf, screen: v.screen && v.screen.indexf }; });
 	const tabletPosition = () => tablet.evaluate(() => {
 		const s = f => { try { const t = document.getElementById(f).contentWindow.Reveal.getState(); return t.indexh + '/' + t.indexf; } catch (e) { return null; } };
 		return s('current') + ' next ' + s('upcoming');
@@ -246,14 +249,16 @@ const until = (page, fn, arg, timeout = 15000) =>
 			return s('current') + ' next ' + s('upcoming') === want;
 		} catch (e) { return false; }
 	}, want);
-	check(overlay.indexf === 1 && await tabletAt(`${h}/0 next ${h}/1`), 'with the overlay up, the tablet shows the line before it, and the line after it as next',
+	check(overlay.indexf === 1 && await tabletAt(`${h}/1 next ${h}/2`), 'with the overlay up, the tablet shows it too, and the line after it as next',
 		await tabletPosition());
+	check(await until(tablet, () => { const v = window.PresenterView; return v && v.state && v.state.indexf === 0 && v.screen && v.screen.indexf === 1; }),
+		'the position is sent without the overlay’s step, and the laptop’s own index besides', await sent());
 	await goTo('poll-choice', 3);
 	const afterOverlay = await laptop.evaluate(() => ({
 		overlay: document.querySelector('#poll-choice .poll-results.overlay').classList.contains('current-fragment'),
 		indexf: Reveal.getState().indexf
 	}));
-	check(!afterOverlay.overlay && afterOverlay.indexf === 2 && await tabletAt(`${h}/1 next ${h + 1}/undefined`),
+	check(!afterOverlay.overlay && afterOverlay.indexf === 2 && await tabletAt(`${h}/2 next ${h + 1}/undefined`),
 		'the next click takes the overlay away; the tablet shows the last line', [afterOverlay, await tabletPosition()]);
 	await goTo('poll-choice', 2);
 	await shot(laptop, 'laptop-choice-overlay');

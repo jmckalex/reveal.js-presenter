@@ -84,6 +84,11 @@ function check(ok, name, detail) {
 			res.writeHead(200, { 'Content-Type': MIME['.js'] });
 			return res.end(config);
 		}
+		// No favicon, and no 404 for it either, which a page would log as an error.
+		if (pathname === '/favicon.ico') {
+			res.writeHead(204);
+			return res.end();
+		}
 		const file = path.join(ROOT, path.normalize(pathname));
 		if (!file.startsWith(ROOT + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
 			res.writeHead(404);

@@ -94,6 +94,14 @@ const check = (ok, what, detail) => { if (!ok) failures++; console.log(`${ok ? '
     await sleep(400);
     out.closedCount = seen.count[seen.count.length - 1];
     await sleep(1100);
+    // several picks, one option standing alone
+    p1.on('poll', d => { if (d && d.id === 'ex') seen.exclusive = d; });
+    out.exBad = (await open({ id: 'ex-bad', kind: 'choice', options: ['Ali', 'Bea', 'None'], picks: 3, exclusive: 3 })).reason;
+    await sleep(1100);
+    out.ex = (await open({ id: 'ex', kind: 'choice', options: ['Ali', 'Bea', 'Cal', 'None of them'], picks: 4, exclusive: 3, prompt: 'Who is generous?' })).ok;
+    out.exAns = [(await answer(p1, 'ex', [0, 2], 1)).ok, (await answer(p2, 'ex', [3], 2)).ok, (await answer(p3, 'ex', [1, 3], 3)).reason];
+    await sleep(300); out.exPoll = seen.exclusive && seen.exclusive.exclusive;
+    await sleep(1100);
     // the word filter, in an unmoderated cloud
     out.cloud = (await open({ id: 'w', kind: 'words', entries: 3, moderated: false, prompt: 'One word' })).ok;
     out.cloudAns = [await answer(p1, 'w', ['Spectacle', 'sh1t show'], 1), await answer(p2, 'w', ['f u c k', 'push it', 'Scunthorpe'], 2)];
@@ -164,6 +172,8 @@ const check = (ok, what, detail) => { if (!ok) failures++; console.log(`${ok ? '
   check(JSON.stringify(out.pinTally) === '[[500,250]]', 'pin: the point reaches the laptop', out.pinTally);
   check(out.choice && out.choiceCount && out.choiceCount.id === 'ch' && out.choiceCount.counts.join() === '1,2' && out.choiceCount.total === 3 && out.choiceCount.open === true, 'the tablet hears a choice poll’s counts', out.choiceCount);
   check(out.closedCount && out.closedCount.id === 'ch' && out.closedCount.open === false, 'and that it has closed', out.closedCount);
+  check(out.exBad === 'invalid', 'an exclusive option outside the options is refused', out.exBad);
+  check(out.ex && out.exPoll === 3 && out.exAns.join() === 'true,true,invalid', 'several picks: phones are sent the exclusive option, which is accepted only on its own', [out.exPoll, out.exAns]);
   check(out.cloud && out.cloudAns[0].ok && out.cloudAns[0].held === 1 && out.cloudAns[1].held === 1, 'filter: a phone is told how many of its words wait', out.cloudAns);
   check(JSON.stringify((out.cloudTablet || []).sort()) === JSON.stringify(['Scunthorpe:shown', 'Spectacle:shown', 'f u c k:pending:caught', 'push it:shown', 'sh1t show:pending:caught']), 'filter: caught words wait on the tablet, flagged; the rest are shown', out.cloudTablet);
   check(JSON.stringify((out.cloudLaptop || []).sort()) === JSON.stringify(['Scunthorpe', 'Spectacle', 'push it']), 'filter: the laptop gets only the shown words', out.cloudLaptop);

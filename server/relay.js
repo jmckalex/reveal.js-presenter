@@ -117,6 +117,7 @@ function cleanName(name) {
  *
  * Kinds, and the answer each takes:
  *   choice       an option's index; with picks > 1, a list of up to picks indices
+ *                (the exclusive option's, if there is one, only on its own)
  *   number       an integer from min to max
  *   scale        a list: for each statement, an integer from min to max
  *   premises     a list: for each statement, 1 (accepted) or 0 (rejected)
@@ -325,7 +326,11 @@ function pollDefinition(p) {
 				? { name: oneLine(v.name, 40), prompt: oneLine(v.prompt, 300), story: oneLine(v.story, MAX_STORY_LENGTH) } : null);
 			return versions.every(v => v && v.name && v.story) ? { ...base, options, versions } : null;
 		}
-		return picks === 1 ? { ...base, options } : { ...base, options, picks };
+		if (picks === 1) return { ...base, options };
+		// With several picks, an option that stands alone ("None of them"):
+		// its index, which a phone may choose only on its own.
+		if (p.exclusive === undefined) return { ...base, options, picks };
+		return isInt(p.exclusive, 0, options.length - 1) ? { ...base, options, picks, exclusive: p.exclusive } : null;
 	}
 	case 'number': {
 		const { min, max } = p;
@@ -426,6 +431,7 @@ function answerTo(def, value) {
 		const last = def.options.length - 1;
 		if (!def.picks) return isInt(value, 0, last) ? value : undefined;
 		if (!Array.isArray(value) || value.length < 1 || value.length > def.picks || !value.every(v => isInt(v, 0, last))) return undefined;
+		if (def.exclusive !== undefined && value.length > 1 && value.includes(def.exclusive)) return undefined;
 		return new Set(value).size === value.length ? [...value].sort((a, b) => a - b) : undefined;
 	}
 	case 'number':

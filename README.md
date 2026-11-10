@@ -24,9 +24,12 @@ chalkboard that scrolls down without end, and ◀ ▶ step through the talk.
 
 ## Try it on one computer
 
-Five minutes, with Node 18 or later. From this directory:
+Five minutes, with Node 18 or later. (Without git, GitHub's **Code →
+Download ZIP** gives the same files; unzip them and start at the `npm` line.)
 
 ```
+git clone https://github.com/jmckalex/reveal.js-presenter.git
+cd reveal.js-presenter
 npm --prefix server install
 node server/relay.js &
 node tools/make-channel.js http://127.0.0.1:1948 --write client/presenter-config.js \
@@ -93,7 +96,9 @@ that for them.
 Open Claude Code in the project that holds your presentations and say
 something like:
 
-> Add the presenter view from ~/Source/reveal.js/presenter to my decks.
+> Add the presenter view from ~/reveal.js-presenter to my decks.
+
+(using wherever you cloned this project).
 
 The agent should read [`CLAUDE.md`](CLAUDE.md) in this directory. It describes
 how to fit the package to different deck setups (plain HTML, templated, ES
